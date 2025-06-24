@@ -812,3 +812,20 @@ function chatbot_match_text(string $message)
 }
 
 // --------------------------- End ACF
+
+// get welcomed users start
+
+add_action('rest_api_init', function () {
+    register_rest_route('chatbot/v1', '/welcomed-users', [
+        'methods' => 'GET',
+        'callback' => function () {
+            global $wpdb;
+            $table = $wpdb->prefix . 'bot_welcomed_users';
+            $users = $wpdb->get_results("SELECT name, phone FROM $table");
+            return rest_ensure_response($users);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+});
+
+// get welcomed users end

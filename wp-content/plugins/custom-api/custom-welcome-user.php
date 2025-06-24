@@ -36,7 +36,6 @@ add_action('admin_menu', function () {
     );
 });
 
-// Admin page content
 function welcomed_users_admin_page()
 {
     global $wpdb;
@@ -49,6 +48,17 @@ function welcomed_users_admin_page()
         echo '<div class="updated"><p>User deleted successfully.</p></div>';
     }
 
+    // Handle broadcast form submission (just demo, no actual send yet)
+    if (isset($_POST['broadcast_users']) && check_admin_referer('broadcast_welcomed_users')) {
+        $selected_users = $_POST['selected_users'] ?? [];
+        if (empty($selected_users)) {
+            echo '<div class="error"><p>No users selected for broadcast.</p></div>';
+        } else {
+            echo '<div class="updated"><p>Selected user IDs for broadcast: ' . esc_html(implode(', ', $selected_users)) . '</p></div>';
+            // TODO: Implement actual broadcast sending here
+        }
+    }
+
     // Fetch users
     $users = $wpdb->get_results("SELECT * FROM $table ORDER BY welcomed_at DESC");
 
@@ -58,11 +68,21 @@ function welcomed_users_admin_page()
     if (!$users) {
         echo '<p>No users have been welcomed yet.</p>';
     } else {
+        // Begin form
+        echo '<form method="post">';
+        wp_nonce_field('broadcast_welcomed_users');
+
+        // echo '<p><input type="submit" name="broadcast_users" class="button button-primary" value="Send Broadcast Message to Selected"></p>';
+
         echo '<table class="wp-list-table widefat fixed striped">';
-        echo '<thead><tr><th>ID</th><th>Name</th><th>Phone</th><th>Welcomed At</th><th>Actions</th></tr></thead><tbody>';
+        echo '<thead><tr>';
+        echo '<th style="width: 30px;"><input type="checkbox" id="select-all-users"></th>';
+        echo '<th>ID</th><th>Name</th><th>Phone</th><th>Welcomed At</th><th>Actions</th></tr></thead><tbody>';
+
         foreach ($users as $user) {
             $phone_number = explode('@', $user->phone)[0];
             echo '<tr>';
+            echo '<td><input type="checkbox" name="selected_users[]" value="' . esc_attr($user->id) . '"></td>';
             echo '<td>' . esc_html($user->id) . '</td>';
             echo '<td>' . esc_html($user->name) . '</td>';
             echo '<td>' . esc_html($phone_number) . '</td>';
@@ -70,8 +90,26 @@ function welcomed_users_admin_page()
             echo '<td><a href="' . admin_url('admin.php?page=welcomed-users&delete_user=' . $user->id) . '" class="button" onclick="return confirm(\'Delete this user?\')">Delete</a></td>';
             echo '</tr>';
         }
+
         echo '</tbody></table>';
+
+        // echo '<p><input type="submit" name="broadcast_users" class="button button-primary" value="Send Broadcast Message to Selected"></p>';
+
+        echo '</form>';
+
+        // Add JS for "select all" checkbox
+        ?>
+        <script>
+            document.getElementById('select-all-users').addEventListener('click', function(event) {
+                const checked = event.target.checked;
+                document.querySelectorAll('input[name="selected_users[]"]').forEach(cb => {
+                    cb.checked = checked;
+                });
+            });
+        </script>
+        <?php
     }
 
     echo '</div>';
 }
+
