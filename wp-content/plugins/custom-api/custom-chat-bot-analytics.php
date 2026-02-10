@@ -59,7 +59,14 @@ function chatbot_analytics_page()
 
     // Top queries by count (group by query, order desc)
     $top_queries = $wpdb->get_results(
-        "SELECT query, COUNT(*) as total FROM $analytics_table GROUP BY query ORDER BY total DESC LIMIT 20"
+        "SELECT a.query, COUNT(*) as total,
+            (SELECT response FROM $analytics_table b 
+                WHERE b.query = a.query AND b.response != '' 
+                LIMIT 1) as response
+        FROM $analytics_table a
+        GROUP BY a.query
+        ORDER BY total DESC
+        LIMIT 20"
     );
 
 ?>
@@ -106,12 +113,16 @@ function chatbot_analytics_page()
 
                 foreach ($top_queries as $row) {
                     $query = $row->query;
+                    $response = $row->response;
+                    print_r($row);
                     $is_matched = false;
 
-                    foreach ($all_keywords as $keyword) {
-                        if (stripos($query, $keyword) !== false) {
-                            $is_matched = true;
-                            break;
+                    if (!empty($response)) {
+                        foreach ($all_keywords as $keyword) {
+                            if (stripos($query, $keyword) !== false) {
+                                $is_matched = true;
+                                break;
+                            }
                         }
                     }
                     echo '<tr>';
