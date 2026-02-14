@@ -51,6 +51,12 @@ get_header();
     margin-bottom: 30px;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.date-filter-inputs{
+    display: flex;
     gap: 15px;
     align-items: center;
     flex-wrap: wrap;
@@ -71,6 +77,11 @@ get_header();
     border: 1px solid #ddd;
     border-radius: 4px;
     background: white;
+}
+
+.date-filter .btn{
+    width: fit-content;
+    margin-bottom: 0;
 }
 
 .stats-grid {
@@ -128,7 +139,7 @@ get_header();
 
 .charts-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
     gap: 20px;
 }
 
@@ -297,7 +308,8 @@ get_header();
     font-size: 10px;
     cursor: pointer;
     flex-direction: column;
-    padding: 5px;
+    width: 66px;
+    height: 66px;
 }
 
 .heatmap-cell strong {
@@ -322,6 +334,10 @@ get_header();
 .heatmap-labels.by-day {
     grid-template-columns: repeat(7, 1fr);
 }
+
+.heatmap-labels.by-day div, .heatmap-labels.by-hour div {
+    width: 66px;
+}
 </style>
 
 <div class="dashboard-container">
@@ -331,29 +347,34 @@ get_header();
             <p style="color: #666; margin: 5px 0 0 0;">Analytics Dashboard</p>
         </div>
         <div class="user-info">
-            <span style="font-weight: 500;"><?php echo esc_html($company_name ?: $client->post_title); ?></span>
+            <p style="font-weight: 500;"><?php echo esc_html($company_name ?: $client->post_title); ?></p>
             <button id="logout-btn" class="btn btn-secondary">Logout</button>
         </div>
     </div>
 
     <div class="date-filter">
-        <label>📅 Date Range:</label>
+        <div class="date-filter-inputs">
+
         
-        <select id="date-preset">
-            <option value="">Custom Range</option>
-            <option value="7">Last 7 Days</option>
-            <option value="30">Last 30 Days</option>
-            <option value="60">Last 60 Days</option>
-            <option value="90">Last 90 Days</option>
-            <option value="180">Last 6 Months</option>
-            <option value="365">Last Year</option>
-            <option value="mtd" selected>Month to Date</option>
-            <option value="all">All Time</option>
-        </select>
-        
-        <input type="date" id="start-date" value="<?php echo date('Y-m-01'); ?>">
-        <span>to</span>
-        <input type="date" id="end-date" value="<?php echo date('Y-m-d'); ?>">
+            <label>📅 Date Range:</label>
+            
+            <select id="date-preset">
+                <option value="">Custom Range</option>
+                <option value="7">Last 7 Days</option>
+                <option value="30">Last 30 Days</option>
+                <option value="60">Last 60 Days</option>
+                <option value="90">Last 90 Days</option>
+                <option value="180">Last 6 Months</option>
+                <option value="365">Last Year</option>
+                <option value="mtd" selected>Month to Date</option>
+                <option value="all">All Time</option>
+            </select>
+            
+            <input type="date" id="start-date" value="<?php echo date('Y-m-01'); ?>">
+            <span>to</span>
+            <input type="date" id="end-date" value="<?php echo date('Y-m-d'); ?>">
+
+        </div>
         
         <button id="apply-filter" class="btn btn-primary">Apply Filter</button>
     </div>
@@ -434,6 +455,7 @@ jQuery(document).ready(function($) {
             method: 'GET',
             data: params,
             success: function(response) {
+                console.log(response)
                 renderAnalytics(response);
             },
             error: function(xhr) {
@@ -462,6 +484,28 @@ jQuery(document).ready(function($) {
             <div style="background: #f0f9ff; padding: 15px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
                 <strong>Showing data for:</strong> ${dateRangeText}
             </div>
+
+            <!-- Value Framing -->
+            <div class="stats-grid" style="margin-top: 20px;">
+                <div class="stat-card" style="grid-column: span 2; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                    <h3 style="color: white; opacity: 0.9;">💡 Key Insight</h3>
+                    <p style="font-size: 20px; font-weight: 600; margin: 10px 0;">
+                        ${exec.conversion_rate}% of submissions successfully converted to rewards
+                    </p>
+                    <p style="opacity: 0.9; margin: 0;">
+                        Out of ${exec.total_receipts.toLocaleString()} submissions, ${exec.receipts_with_points.toLocaleString()} were approved and earned points
+                    </p>
+                </div>
+                <div class="stat-card" style="grid-column: span 2; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">
+                    <h3 style="color: white; opacity: 0.9;">🛡️ Prevented</h3>
+                    <p style="font-size: 20px; font-weight: 600; margin: 10px 0;">
+                        ${fraud.total_blocked} fraudulent submissions blocked
+                    </p>
+                    <p style="opacity: 0.9; margin: 0;">
+                        Prevented ${fraud.duplicate_attempts} duplicate attempts • Average Risk score: ${fraud.avg_fraud_score}/100
+                    </p>
+                </div>
+            </div>
             
             <!-- EXECUTIVE OVERVIEW -->
             <div class="section-title">📊 Executive Overview</div>
@@ -473,8 +517,21 @@ jQuery(document).ready(function($) {
                 </div>
                 <div class="stat-card">
                     <h3>Approval Rate</h3>
-                    <p class="stat-number stat-positive">${exec.approval_rate}%</p>
-                    <p class="stat-meta">${exec.valid_receipts.toLocaleString()} approved submissions</p>
+                    <p class="stat-number stat-positive">${exec.approval_rate}%</p>       
+                </div>
+                <div class="stat-card">
+                    <h3>Approved submissions</h3>
+                    <p class="stat-number stat-positive">${exec.valid_receipts.toLocaleString()}</p>   
+                </div>
+                <div class="stat-card">
+                    <h3>Rejection Rate</h3>
+                    <p class="stat-number">${fraud.fraud_rate}%</p>
+                   
+                </div>
+                <div class="stat-card">
+                    <h3>Submissions rejected</h3>
+                    <p class="stat-number">${fraud.total_blocked}</p>
+                    
                 </div>
                 <div class="stat-card">
                     <h3>Active Users</h3>
@@ -483,7 +540,7 @@ jQuery(document).ready(function($) {
                 </div>
                 <div class="stat-card">
                     <h3>Total Revenue</h3>
-                    <p class="stat-number">฿${parseFloat(exec.total_revenue).toLocaleString()}</p>
+                    <p class="stat-number">S$${parseFloat(exec.total_revenue).toLocaleString()}</p>
                     <p class="stat-meta">From approved receipts</p>
                 </div>
                 <div class="stat-card">
@@ -498,16 +555,54 @@ jQuery(document).ready(function($) {
                 </div>
             </div>
 
-            <!-- FRAUD & RISK ANALYTICS -->
-            <div class="section-title" style="margin-top: 40px;">🛡️ Fraud & Risk Analytics</div>
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <h3>Fraud Rate</h3>
-                    <p class="stat-number stat-negative">${fraud.fraud_rate}%</p>
-                    <p class="stat-meta">${fraud.total_blocked} submissions blocked</p>
+            <div class="chart-card" style="grid-column: span 2;">
+                <h3>Receipt Submission Flow Funnel</h3>
+                <div class="funnel-chart">
+                    <div class="funnel-step">
+                        <div class="funnel-label">Submitted Receipt</div>
+                        <div class="funnel-bar">
+                            <div class="funnel-fill" style="width: 100%">
+                                ${engagement.funnel.submitted_receipt} users (100%)
+                            </div>
+                        </div>
+                    </div>
+                    <div class="funnel-step">
+                        <div class="funnel-label">Approved Receipt</div>
+                        <div class="funnel-bar">
+                            <div class="funnel-fill" style="width: ${(engagement.funnel.approved_receipt / engagement.funnel.submitted_receipt * 100).toFixed(1)}%">
+                                ${engagement.funnel.approved_receipt} users (${engagement.funnel.submitted_to_approved_rate}%)
+                            </div>
+                        </div>
+                    </div>
+                    <div class="funnel-step">
+                        <div class="funnel-label">Earned Points</div>
+                        <div class="funnel-bar">
+                            <div class="funnel-fill" style="width: ${(engagement.funnel.earned_points / engagement.funnel.submitted_receipt * 100).toFixed(1)}%">
+                                ${engagement.funnel.earned_points} users (${engagement.funnel.approved_to_points_rate}% of approved)
+                            </div>
+                        </div>
+                    </div>
+                    <div class="funnel-step">
+                        <div class="funnel-label">Redeemed Reward</div>
+                        <div class="funnel-bar">
+                            <div class="funnel-fill" style="width: ${(engagement.funnel.redeemed_reward / engagement.funnel.submitted_receipt * 100).toFixed(1)}%">
+                                ${engagement.funnel.redeemed_reward} users (${engagement.funnel.points_to_redeemed_rate}% of point holders)
+                            </div>
+                        </div>
+                    </div>
                 </div>
+                <p style="margin-top: 15px; font-size: 13px; color: #666;">
+                    Drop-off: ${engagement.funnel.submitted_receipt - engagement.funnel.approved_receipt} users didn't get approved, 
+                    ${engagement.funnel.approved_receipt - engagement.funnel.redeemed_reward} users haven't redeemed yet
+                </p>
+            </div>
+
+            <!-- FRAUD & RISK ANALYTICS -->
+            <div class="section-title" style="margin-top: 40px;">🛡️ Risk Analytics</div>
+            <div class="stats-grid">
+                
                 <div class="stat-card">
-                    <h3>Average Fraud Score</h3>
+                    <h3>Average Risk Score</h3>
                     <p class="stat-number">${fraud.avg_fraud_score}</p>
                     <p class="stat-meta">Out of 100 (${fraud.total_scored} receipts scored)</p>
                 </div>
@@ -517,7 +612,7 @@ jQuery(document).ready(function($) {
                     <p class="stat-meta">Automatically prevented</p>
                 </div>
                 <div class="stat-card">
-                    <h3>Fraud Decisions</h3>
+                    <h3>Risk Decisions</h3>
                     <p class="stat-number">${fraud.fraud_decisions.approve + fraud.fraud_decisions.review + fraud.fraud_decisions.reject}</p>
                     <p class="stat-meta">
                         ✅ ${fraud.fraud_decisions.approve} approved • 
@@ -530,12 +625,12 @@ jQuery(document).ready(function($) {
             <!-- Fraud Details Grid -->
             <div class="charts-grid" style="margin-top: 20px;">
                 <div class="chart-card">
-                    <h3>🚩 Top Fraud Flags</h3>
+                    <h3>🚩 Top Risk Flags</h3>
                     ${Object.keys(fraud.fraud_reasons).length > 0 ? `
                         <table class="data-table">
                             <thead>
                                 <tr>
-                                    <th>Fraud Flag</th>
+                                    <th>Flag</th>
                                     <th>Count</th>
                                     <th>% of Total</th>
                                 </tr>
@@ -550,11 +645,11 @@ jQuery(document).ready(function($) {
                                 `).join('')}
                             </tbody>
                         </table>
-                    ` : '<p style="color: #999; text-align: center; padding: 20px;">No fraud flags recorded</p>'}
+                    ` : '<p style="color: #999; text-align: center; padding: 20px;">No flags recorded</p>'}
                 </div>
                 
                 <div class="chart-card">
-                    <h3>📊 Fraud Score Distribution</h3>
+                    <h3>📊 Risk Score Distribution</h3>
                     <div style="margin-top: 20px;">
                         ${Object.entries(fraud.fraud_score_distribution).map(([range, count]) => {
                             const max = Math.max(...Object.values(fraud.fraud_score_distribution));
@@ -579,27 +674,6 @@ jQuery(document).ready(function($) {
                 </div>
             </div>
 
-            <!-- Value Framing -->
-            <div class="stats-grid" style="margin-top: 20px;">
-                <div class="stat-card" style="grid-column: span 2; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-                    <h3 style="color: white; opacity: 0.9;">💡 Key Insight</h3>
-                    <p style="font-size: 20px; font-weight: 600; margin: 10px 0;">
-                        ${exec.conversion_rate}% of submissions successfully converted to rewards
-                    </p>
-                    <p style="opacity: 0.9; margin: 0;">
-                        Out of ${exec.total_receipts.toLocaleString()} submissions, ${exec.valid_receipts.toLocaleString()} were approved and earned points
-                    </p>
-                </div>
-                <div class="stat-card" style="grid-column: span 2; background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white;">
-                    <h3 style="color: white; opacity: 0.9;">🛡️ Fraud Prevented</h3>
-                    <p style="font-size: 20px; font-weight: 600; margin: 10px 0;">
-                        ${fraud.total_blocked} fraudulent submissions blocked
-                    </p>
-                    <p style="opacity: 0.9; margin: 0;">
-                        Prevented ${fraud.duplicate_attempts} duplicate attempts • Average fraud score: ${fraud.avg_fraud_score}/100
-                    </p>
-                </div>
-            </div>
 
             <!-- USER ENGAGEMENT -->
             <div class="section-title" style="margin-top: 40px;">👥 User Engagement</div>
@@ -623,49 +697,138 @@ jQuery(document).ready(function($) {
                     <canvas id="newVsReturningChart" style="max-height: 300px;"></canvas>
                 </div>
                 
-                <div class="chart-card" style="grid-column: span 2;">
-    <h3>User Conversion Funnel</h3>
-    <div class="funnel-chart">
-        <div class="funnel-step">
-            <div class="funnel-label">Submitted Receipt</div>
-            <div class="funnel-bar">
-                <div class="funnel-fill" style="width: 100%">
-                    ${engagement.funnel.submitted_receipt} users (100%)
-                </div>
-            </div>
-        </div>
-        <div class="funnel-step">
-            <div class="funnel-label">Approved Receipt</div>
-            <div class="funnel-bar">
-                <div class="funnel-fill" style="width: ${(engagement.funnel.approved_receipt / engagement.funnel.submitted_receipt * 100).toFixed(1)}%">
-                    ${engagement.funnel.approved_receipt} users (${engagement.funnel.submitted_to_approved_rate}%)
-                </div>
-            </div>
-        </div>
-        <div class="funnel-step">
-            <div class="funnel-label">Earned Points</div>
-            <div class="funnel-bar">
-                <div class="funnel-fill" style="width: ${(engagement.funnel.earned_points / engagement.funnel.submitted_receipt * 100).toFixed(1)}%">
-                    ${engagement.funnel.earned_points} users (${engagement.funnel.approved_to_points_rate}% of approved)
-                </div>
-            </div>
-        </div>
-        <div class="funnel-step">
-            <div class="funnel-label">Redeemed Reward</div>
-            <div class="funnel-bar">
-                <div class="funnel-fill" style="width: ${(engagement.funnel.redeemed_reward / engagement.funnel.submitted_receipt * 100).toFixed(1)}%">
-                    ${engagement.funnel.redeemed_reward} users (${engagement.funnel.points_to_redeemed_rate}% of point holders)
-                </div>
-            </div>
-        </div>
+                
+</div>
+                <!-- ITEM & BASKET ANALYTICS -->
+<div class="section-title" style="margin-top: 40px;">🛒 Item & Basket Analytics</div>
+<div class="stats-grid">
+    <div class="stat-card">
+        <h3>General Avg Basket Size</h3>
+        <p class="stat-number">${data.item_analytics.avg_basket_size}</p>
+        <p class="stat-meta">Items per receipt (all receipts)</p>
     </div>
-    <p style="margin-top: 15px; font-size: 13px; color: #666;">
-        Drop-off: ${engagement.funnel.submitted_receipt - engagement.funnel.approved_receipt} users didn't get approved, 
-        ${engagement.funnel.approved_receipt - engagement.funnel.redeemed_reward} users haven't redeemed yet
-    </p>
+    <div class="stat-card">
+        <h3>Approved Basket Size</h3>
+        <p class="stat-number">${data.item_analytics.avg_approved_basket_size}</p>
+        <p class="stat-meta">Items per receipt (approved only)</p>
+    </div>
+    <div class="stat-card">
+        <h3>General Avg Basket Total</h3>
+        <p class="stat-number">S$${data.item_analytics.avg_basket_total}</p>
+        <p class="stat-meta">All receipts</p>
+    </div>
+    <div class="stat-card">
+        <h3>Approved Basket Total</h3>
+        <p class="stat-number">S$${data.item_analytics.avg_approved_basket_total}</p>
+        <p class="stat-meta">Approved receipts only</p>
+    </div>
+    <div class="stat-card">
+        <h3>Avg Item Price</h3>
+        <p class="stat-number">S$${data.item_analytics.avg_item_price}</p>
+        <p class="stat-meta">${data.item_analytics.item_to_basket_ratio}% of basket total</p>
+    </div>
+    <div class="stat-card">
+        <h3>Total Items Analyzed</h3>
+        <p class="stat-number">${data.item_analytics.total_items_analyzed.toLocaleString()}</p>
+        <p class="stat-meta">From ${data.item_analytics.total_approved_baskets} approved receipts</p>
+    </div>
 </div>
+
+<!-- Merchant & Brand Analytics -->
+<div class="charts-grid" style="margin-top: 20px;">
+    <div class="chart-card">
+        <h3>🏪 Top Merchants by Basket Size</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Merchant</th>
+                    <th>Avg Basket Size</th>
+                    <th>Avg Basket Total</th>
+                    <th>Receipts</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${data.merchant_basket_analytics.top_merchants_by_basket_size.map(merchant => `
+                    <tr>
+                        <td><strong>${merchant.merchant}</strong></td>
+                        <td>${merchant.avg_basket_size} items</td>
+                        <td>S$${merchant.avg_basket_total.toLocaleString()}</td>
+                        <td>${merchant.approved_receipts}/${merchant.total_receipts}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="chart-card">
+        <h3>🏷️ Top Brands by Purchase Amount</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Brand</th>
+                    <th>Purchases</th>
+                    <th>Total Amount</th>
+                    <th>Avg Cost</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${data.brand_analytics.top_brands.map(brand => `
+                    <tr>
+                        <td><strong>${brand.brand}</strong></td>
+                        <td>${brand.total_purchases}</td>
+                        <td>S$${brand.total_amount.toLocaleString()}</td>
+                        <td>S$${brand.avg_purchase_cost.toFixed(2)}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="chart-card">
+        <h3>📦 Most Purchased Items</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Times Purchased</th>
+                    <th>Total Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${data.item_insights.most_purchased.slice(0, 10).map(item => `
+                    <tr>
+                        <td>${item.name}</td>
+                        <td><strong>${item.count}</strong></td>
+                        <td>S$${item.total_amount.toFixed(2)}</td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    </div>
+    
+    <div class="chart-card">
+        <h3>💎 Most Expensive Items</h3>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Item</th>
+                    <th>Brand</th>
+                    <th>Price</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${data.item_insights.most_expensive.slice(0, 10).map(item => `
+                    <tr>
+                        <td>${item.name}</td>
+                        <td>${item.brand}</td>
+                        <td><strong>S$${item.price.toFixed(2)}</strong></td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    </div>
 </div>
-<!-- CHARTS -->
+        <!-- CHARTS -->
         <div class="section-title" style="margin-top: 40px;">📈 Trends & Insights</div>
         <div class="charts-grid">
             <div class="chart-card">
@@ -754,8 +917,10 @@ jQuery(document).ready(function($) {
                             const color = intensity > 0.7 ? '#1e40af' : 
                                         intensity > 0.4 ? '#3b82f6' : 
                                         intensity > 0.2 ? '#60a5fa' : '#e5e7eb';
+                            const textColor = intensity > 0.7 ? '#fff' : 
+                                        intensity > 0.4 ? '#333' : '#333';
                             const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day];
-                            return `<div class="heatmap-cell" style="background: ${color}" title="${dayName} - ${count} submissions"><strong>${count}</strong><br>${dayName}</div>`;
+                            return `<div class="heatmap-cell" style="background: ${color}" title="${dayName} - ${count} submissions"><strong style="color:${textColor}">${count}</strong><br><span style="color:${textColor}">${dayName}</span></div>`;
                         }).join('')}
                     </div>
                 </div>

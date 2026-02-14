@@ -7,7 +7,7 @@
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    background: #116500;
+    background: #eeebe8;
     min-height: 100vh;
     color: #333;
     line-height: 1.6;
@@ -181,6 +181,7 @@ body {
 .user-info p {
     color: #666;
     font-size: 14px;
+    white-space: nowrap;
 }
 
 .btn-logout {

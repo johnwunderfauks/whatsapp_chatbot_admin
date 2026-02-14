@@ -199,11 +199,11 @@ function custom_receipt_details_callback($post)
         <?php endif; ?>
         
         <!-- Notify Button -->
-        <button type="button" id="notify-user-btn" class="notify-user-btn" 
+        <!-- <button type="button" id="notify-user-btn" class="notify-user-btn" 
                 data-receipt-id="<?php echo esc_attr($post->ID); ?>"
                 data-phone="<?php echo esc_attr($phone); ?>">
             📱 Notify User via WhatsApp
-        </button>
+        </button> -->
         <div id="notify-status"></div>
     </div>
 
@@ -233,12 +233,15 @@ function custom_receipt_details_callback($post)
 
     <div class="receipt-meta-row">
         <label for="receipt_items">Items (one per line):</label><br>
-        <textarea id="receipt_items" name="receipt_items" class="receipt-items"><?php 
-            if (is_array($items)) {
-                echo esc_textarea(implode("\n", $items));
+        
+        <textarea id="receipt_items" name="receipt_items" class="receipt-items">
+        <?php 
+            if (!empty($items)) {
+                echo esc_textarea(json_encode($items, JSON_PRETTY_PRINT));
             }
-        ?></textarea>
-        <p class="description">Enter each item on a new line</p>
+        ?>
+        </textarea>
+        <p class="description">Edit JSON carefully. Must remain valid format.</p>
     </div>
 
     <div class="receipt-meta-row">
@@ -247,46 +250,46 @@ function custom_receipt_details_callback($post)
         <p class="description">This is read-only (original OCR output)</p>
     </div>
 
-    <script>
-    jQuery(document).ready(function($) {
-        $('#notify-user-btn').on('click', function() {
-            var btn = $(this);
-            var receiptId = btn.data('receipt-id');
-            var phone = btn.data('phone');
-            var statusDiv = $('#notify-status');
+     <script>
+    // jQuery(document).ready(function($) {
+        // $('#notify-user-btn').on('click', function() {
+        //     var btn = $(this);
+        //     var receiptId = btn.data('receipt-id');
+        //     var phone = btn.data('phone');
+        //     var statusDiv = $('#notify-status');
             
-            if (!phone) {
-                statusDiv.removeClass('success').addClass('error').text('❌ No phone number found for this user').show();
-                return;
-            }
+        //     if (!phone) {
+        //         statusDiv.removeClass('success').addClass('error').text('❌ No phone number found for this user').show();
+        //         return;
+        //     }
             
-            btn.prop('disabled', true).text('Sending...');
-            statusDiv.hide();
+        //     btn.prop('disabled', true).text('Sending...');
+        //     statusDiv.hide();
             
-            $.ajax({
-                url: '<?php echo admin_url('admin-ajax.php'); ?>',
-                type: 'POST',
-                data: {
-                    action: 'notify_receipt_user',
-                    receipt_id: receiptId,
-                    nonce: '<?php echo wp_create_nonce('notify_receipt_nonce'); ?>'
-                },
-                success: function(response) {
-                    if (response.success) {
-                        statusDiv.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
-                    } else {
-                        statusDiv.removeClass('success').addClass('error').text('❌ ' + response.data.message).show();
-                    }
-                },
-                error: function() {
-                    statusDiv.removeClass('success').addClass('error').text('❌ Failed to send notification').show();
-                },
-                complete: function() {
-                    btn.prop('disabled', false).text('📱 Notify User via WhatsApp');
-                }
-            });
-        });
-    });
+        //     $.ajax({
+        //         url: '<?php echo admin_url('admin-ajax.php'); ?>',
+        //         type: 'POST',
+        //         data: {
+        //             action: 'notify_receipt_user',
+        //             receipt_id: receiptId,
+        //             nonce: '<?php echo wp_create_nonce('notify_receipt_nonce'); ?>'
+        //         },
+        //         success: function(response) {
+        //             if (response.success) {
+        //                 statusDiv.removeClass('error').addClass('success').text('✅ ' + response.data.message).show();
+        //             } else {
+        //                 statusDiv.removeClass('success').addClass('error').text('❌ ' + response.data.message).show();
+        //             }
+        //         },
+        //         error: function() {
+        //             statusDiv.removeClass('success').addClass('error').text('❌ Failed to send notification').show();
+        //         },
+        //         complete: function() {
+        //             btn.prop('disabled', false).text('📱 Notify User via WhatsApp');
+        //         }
+        //     });
+        // });
+    // }); 
     </script>
     <?php
 }
@@ -378,6 +381,268 @@ function custom_notify_receipt_user()
         wp_send_json_success(array('message' => 'Notification sent successfully to ' . $phone));
     } else {
         wp_send_json_error(array('message' => 'Failed to send notification'));
+    }
+}
+
+/**
+ * Update receipt status
+ */
+add_action('rest_api_init', function () {
+    register_rest_route('custom/v1', '/receipt-status', array(
+        'methods' => 'POST',
+        'callback' => 'custom_update_receipt_status',
+        'permission_callback' => function () {
+            return current_user_can('edit_posts');
+        },
+    ));
+});
+
+function custom_update_receipt_status(WP_REST_Request $request) {
+    $receipt_id = $request->get_param('receipt_id');
+    $status = $request->get_param('status'); // accepted, pending, rejected
+    $rejection_reason = $request->get_param('rejection_reason');
+    
+    if (!$receipt_id || !$status) {
+        return new WP_Error('missing_data', 'Receipt ID and status are required', array('status' => 400));
+    }
+    
+    // Validate status
+    $valid_statuses = array('accepted', 'pending', 'rejected');
+    if (!in_array($status, $valid_statuses)) {
+        return new WP_Error('invalid_status', 'Status must be: accepted, pending, or rejected', array('status' => 400));
+    }
+    
+    $receipt = get_post($receipt_id);
+    if (!$receipt || $receipt->post_type !== 'receipt') {
+        return new WP_Error('invalid_receipt', 'Receipt not found', array('status' => 404));
+    }
+    
+    // Update receipt status
+    update_post_meta($receipt_id, 'receipt_status', $status);
+    
+    if ($status === 'rejected' && !empty($rejection_reason)) {
+        update_post_meta($receipt_id, 'rejection_reason', sanitize_text_field($rejection_reason));
+    }
+    
+    // If accepted, award points (if not already awarded)
+    if ($status === 'accepted') {
+        $profile_id = get_post_meta($receipt_id, 'profile_id', true);
+        $points = intval(get_post_meta($receipt_id, 'loyalty_points', true));
+        
+        if ($profile_id && $points > 0) {
+            $current_points = intval(get_post_meta($profile_id, 'loyalty_points', true));
+            $new_points = $current_points + $points;
+            update_post_meta($profile_id, 'loyalty_points', $new_points);
+        }
+    }
+    
+    return array(
+        'success' => true,
+        'receipt_id' => $receipt_id,
+        'status' => $status,
+        'message' => "Receipt status updated to {$status}"
+    );
+}
+
+/**
+ * Add custom columns to receipts admin
+ */
+add_filter('manage_receipt_posts_columns', 'add_receipt_custom_columns');
+function add_receipt_custom_columns($columns) {
+    $new_columns = array();
+    foreach ($columns as $key => $value) {
+        $new_columns[$key] = $value;
+        if ($key === 'title') {
+            $new_columns['receipt_status'] = 'Status';
+            $new_columns['fraud_score'] = 'Fraud Score';
+        }
+    }
+    return $new_columns;
+}
+
+/**
+ * Display custom column content
+ */
+add_action('manage_receipt_posts_custom_column', 'show_receipt_custom_columns', 10, 2);
+function show_receipt_custom_columns($column, $post_id) {
+    if ($column === 'receipt_status') {
+        $status = get_post_meta($post_id, 'receipt_status', true) ?: 'pending';
+        
+        $colors = array(
+            'accepted' => '#22c55e',
+            'pending' => '#f59e0b',
+            'rejected' => '#ef4444'
+        );
+        
+        $color = $colors[$status] ?? '#6b7280';
+        
+        echo '<span style="background: ' . $color . '; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;">' 
+            . ucfirst($status) 
+            . '</span>';
+    }
+    
+    if ($column === 'fraud_score') {
+        $fraud_score = floatval(get_post_meta($post_id, 'fraud_score', true));
+        
+        // Determine color based on score
+        if ($fraud_score >= 80) {
+            $color = '#ef4444'; // Red - High risk
+            $emoji = '🚨';
+        } elseif ($fraud_score >= 60) {
+            $color = '#f97316'; // Orange - Medium-high risk
+            $emoji = '⚠️';
+        } elseif ($fraud_score >= 40) {
+            $color = '#f59e0b'; // Yellow - Medium risk
+            $emoji = '⚡';
+        } elseif ($fraud_score >= 20) {
+            $color = '#84cc16'; // Light green - Low-medium risk
+            $emoji = '✓';
+        } else {
+            $color = '#22c55e'; // Green - Low risk
+            $emoji = '✅';
+        }
+        
+        if ($fraud_score > 0) {
+            echo '<span style="background: ' . $color . '; color: white; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 600;">' 
+                . $emoji . ' ' . number_format($fraud_score, 1) 
+                . '</span>';
+        } else {
+            echo '<span style="color: #999;">Not scored</span>';
+        }
+    }
+}
+
+/**
+ * Make custom columns sortable
+ */
+add_filter('manage_edit-receipt_sortable_columns', 'receipt_sortable_columns');
+function receipt_sortable_columns($columns) {
+    $columns['receipt_status'] = 'receipt_status';
+    $columns['fraud_score'] = 'fraud_score';
+    return $columns;
+}
+
+/**
+ * Handle sorting logic
+ */
+add_action('pre_get_posts', 'receipt_custom_orderby');
+function receipt_custom_orderby($query) {
+    if (!is_admin() || !$query->is_main_query()) {
+        return;
+    }
+    
+    $orderby = $query->get('orderby');
+    
+    if ($orderby === 'receipt_status') {
+        $query->set('meta_key', 'receipt_status');
+        $query->set('orderby', 'meta_value');
+    }
+    
+    if ($orderby === 'fraud_score') {
+        $query->set('meta_key', 'fraud_score');
+        $query->set('orderby', 'meta_value_num');
+    }
+}
+
+/**
+ * Add filter dropdowns to receipts list
+ */
+add_action('restrict_manage_posts', 'add_receipt_filters');
+function add_receipt_filters($post_type) {
+    if ($post_type !== 'receipt') {
+        return;
+    }
+    
+    // Status filter
+    $current_status = isset($_GET['receipt_status_filter']) ? $_GET['receipt_status_filter'] : '';
+    ?>
+    <select name="receipt_status_filter">
+        <option value="">All Statuses</option>
+        <option value="pending" <?php selected($current_status, 'pending'); ?>>⏳ Pending</option>
+        <option value="accepted" <?php selected($current_status, 'accepted'); ?>>✅ Accepted</option>
+        <option value="rejected" <?php selected($current_status, 'rejected'); ?>>❌ Rejected</option>
+    </select>
+    <?php
+    
+    // Fraud score filter
+    $current_fraud = isset($_GET['fraud_score_filter']) ? $_GET['fraud_score_filter'] : '';
+    ?>
+    <select name="fraud_score_filter">
+        <option value="">All Fraud Scores</option>
+        <option value="0-20" <?php selected($current_fraud, '0-20'); ?>>✅ Low (0-20)</option>
+        <option value="21-40" <?php selected($current_fraud, '21-40'); ?>>✓ Low-Medium (21-40)</option>
+        <option value="41-60" <?php selected($current_fraud, '41-60'); ?>>⚡ Medium (41-60)</option>
+        <option value="61-80" <?php selected($current_fraud, '61-80'); ?>>⚠️ High (61-80)</option>
+        <option value="81-100" <?php selected($current_fraud, '81-100'); ?>>🚨 Very High (81-100)</option>
+        <option value="not_scored" <?php selected($current_fraud, 'not_scored'); ?>>Not Scored</option>
+    </select>
+    <?php
+}
+
+/**
+ * Filter receipts based on selected filters
+ */
+add_filter('parse_query', 'filter_receipts_by_custom_fields');
+function filter_receipts_by_custom_fields($query) {
+    global $pagenow, $typenow;
+    
+    if (!is_admin() || $pagenow !== 'edit.php' || $typenow !== 'receipt') {
+        return;
+    }
+    
+    $meta_query = array();
+    
+    // Filter by status
+    if (isset($_GET['receipt_status_filter']) && !empty($_GET['receipt_status_filter'])) {
+        $meta_query[] = array(
+            'key' => 'receipt_status',
+            'value' => sanitize_text_field($_GET['receipt_status_filter']),
+            'compare' => '='
+        );
+    }
+    
+    // Filter by fraud score
+    if (isset($_GET['fraud_score_filter']) && !empty($_GET['fraud_score_filter'])) {
+        $fraud_filter = sanitize_text_field($_GET['fraud_score_filter']);
+        
+        if ($fraud_filter === 'not_scored') {
+            // Show receipts with no fraud score or score = 0
+            $meta_query[] = array(
+                'relation' => 'OR',
+                array(
+                    'key' => 'fraud_score',
+                    'compare' => 'NOT EXISTS'
+                ),
+                array(
+                    'key' => 'fraud_score',
+                    'value' => 0,
+                    'compare' => '=',
+                    'type' => 'NUMERIC'
+                )
+            );
+        } else {
+            // Parse range (e.g., "0-20", "81-100")
+            $range = explode('-', $fraud_filter);
+            if (count($range) === 2) {
+                $min = intval($range[0]);
+                $max = intval($range[1]);
+                
+                $meta_query[] = array(
+                    'key' => 'fraud_score',
+                    'value' => array($min, $max),
+                    'compare' => 'BETWEEN',
+                    'type' => 'NUMERIC'
+                );
+            }
+        }
+    }
+    
+    // Apply meta query if filters are set
+    if (!empty($meta_query)) {
+        if (count($meta_query) > 1) {
+            $meta_query['relation'] = 'AND';
+        }
+        $query->set('meta_query', $meta_query);
     }
 }
 
@@ -476,10 +741,17 @@ function custom_save_receipt_meta($post_id)
 
     // Save items (convert textarea lines to array)
     if (isset($_POST['receipt_items'])) {
-        $items_text = sanitize_textarea_field($_POST['receipt_items']);
-        $items_array = array_filter(explode("\n", $items_text)); // Remove empty lines
-        $items_array = array_map('trim', $items_array); // Trim whitespace
-        update_post_meta($post_id, 'receipt_items', $items_array);
+
+        $raw_json = wp_unslash($_POST['receipt_items']);
+
+        $decoded = json_decode($raw_json, true);
+
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            update_post_meta($post_id, 'receipt_items', $decoded);
+        } else {
+            // Optional: show admin error
+            error_log('Invalid receipt_items JSON for post ' . $post_id);
+        }
     }
 
     // Note: raw_ocr_text is not saved here because it's read-only
@@ -1384,6 +1656,607 @@ function custom_redemptions_stats_page()
     </div>
     <?php
 }
+
+/**
+ * Register a custom post type for Promotions
+ */
+function custom_register_promotion_post_type() {
+
+    $labels = array(
+        'name'                  => _x('Promotions', 'Post type general name', 'textdomain'),
+        'singular_name'         => _x('Promotion', 'Post type singular name', 'textdomain'),
+        'menu_name'             => _x('Promotions', 'Admin Menu text', 'textdomain'),
+        'name_admin_bar'        => _x('Promotion', 'Add New on Toolbar', 'textdomain'),
+        'add_new'               => __('Add New', 'textdomain'),
+        'add_new_item'          => __('Add New Promotion', 'textdomain'),
+        'new_item'              => __('New Promotion', 'textdomain'),
+        'edit_item'             => __('Edit Promotion', 'textdomain'),
+        'view_item'             => __('View Promotion', 'textdomain'),
+        'all_items'             => __('All Promotions', 'textdomain'),
+        'search_items'          => __('Search Promotions', 'textdomain'),
+        'not_found'             => __('No promotions found.', 'textdomain'),
+        'not_found_in_trash'    => __('No promotions found in Trash.', 'textdomain'),
+    );
+
+    $args = array(
+        'labels'             => $labels,
+        'public'             => true,
+        'publicly_queryable' => true,
+        'show_ui'            => true,
+        'show_in_menu'       => true,
+        'query_var'          => true,
+        'rewrite'            => array('slug' => 'promotion'),
+        'capability_type'    => 'post',
+        'has_archive'        => true,
+        'hierarchical'       => false,
+        'menu_position'      => 25,
+        'menu_icon'          => 'dashicons-megaphone',
+        'supports'           => array('title', 'editor', 'thumbnail'),
+        'show_in_rest'       => true, // Enables Gutenberg + API
+    );
+
+    register_post_type('promotion', $args);
+}
+add_action('init', 'custom_register_promotion_post_type');
+
+add_action('add_meta_boxes', 'custom_add_promotion_meta_boxes');
+
+function custom_add_promotion_meta_boxes() {
+    add_meta_box(
+        'promotion_details',
+        'Promotion Details',
+        'custom_promotion_details_callback',
+        'promotion',
+        'normal',
+        'high'
+    );
+}
+
+function custom_promotion_details_callback($post) {
+
+    wp_nonce_field('promotion_details_nonce', 'promotion_details_nonce_field');
+
+    $expiry_date = get_post_meta($post->ID, 'expiry_date', true);
+    $promo_link  = get_post_meta($post->ID, 'promo_link', true);
+    $is_active   = get_post_meta($post->ID, 'is_active', true);
+
+    $media_id  = get_post_meta($post->ID, 'promotion_media_id', true);
+    $media_url = $media_id ? wp_get_attachment_url($media_id) : '';
+    $mime      = $media_id ? get_post_mime_type($media_id) : '';
+
+    ?>
+    <div style="margin-bottom:15px;">
+        <label><strong>Expiry Date:</strong></label><br>
+        <input type="date" name="expiry_date" value="<?php echo esc_attr($expiry_date); ?>">
+    </div>
+
+    <div style="margin-bottom:15px;">
+        <label><strong>Promotion Link (Optional):</strong></label><br>
+        <input type="url" name="promo_link" style="width:60%;" value="<?php echo esc_attr($promo_link); ?>" placeholder="https://example.com">
+    </div>
+
+    <div class="promotion-meta-row" style="margin-top:20px;">
+        <label><strong>Promotion Media (Image / GIF / Video)</strong></label><br>
+
+        <input type="hidden" id="promotion_media_id" name="promotion_media_id" value="<?php echo esc_attr($media_id); ?>" />
+
+        <button type="button" class="button" id="upload_promotion_media">
+            Upload / Select Media
+        </button>
+
+        <div id="promotion_media_preview" style="margin-top:15px;">
+            <?php if ($media_url): ?>
+                <?php if (strpos($mime, 'image/') === 0): ?>
+                    <img src="<?php echo esc_url($media_url); ?>" style="max-width:300px;" />
+                <?php elseif (strpos($mime, 'video/') === 0): ?>
+                    <video controls style="max-width:300px;">
+                        <source src="<?php echo esc_url($media_url); ?>" type="<?php echo esc_attr($mime); ?>">
+                    </video>
+                <?php endif; ?>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <div style="margin-bottom:15px;">
+        <label>
+            <input type="checkbox" name="is_active" value="1" <?php checked($is_active, '1'); ?>>
+            Active Promotion
+        </label>
+    </div>
+    <script>
+    jQuery(document).ready(function($){
+
+        var frame;
+
+        $('#upload_promotion_media').on('click', function(e){
+            e.preventDefault();
+
+            if (frame) {
+                frame.open();
+                return;
+            }
+
+            frame = wp.media({
+                title: 'Select Promotion Media',
+                button: { text: 'Use this media' },
+                multiple: false
+            });
+
+            frame.on('select', function(){
+                var attachment = frame.state().get('selection').first().toJSON();
+
+                $('#promotion_media_id').val(attachment.id);
+
+                let previewHTML = '';
+
+                if (attachment.type === 'image') {
+                    previewHTML = `<img src="${attachment.url}" style="max-width:300px;" />`;
+                }
+
+                if (attachment.type === 'video') {
+                    previewHTML = `
+                        <video controls style="max-width:300px;">
+                            <source src="${attachment.url}" type="${attachment.mime}">
+                        </video>`;
+                }
+
+                $('#promotion_media_preview').html(previewHTML);
+            });
+
+            frame.open();
+        });
+
+    });
+    </script>
+    <?php
+}
+
+add_action('save_post_promotion', 'custom_save_promotion_meta');
+
+function custom_save_promotion_meta($post_id) {
+
+    if (!isset($_POST['promotion_details_nonce_field']) ||
+        !wp_verify_nonce($_POST['promotion_details_nonce_field'], 'promotion_details_nonce')) {
+        return;
+    }
+
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
+    if (!current_user_can('edit_post', $post_id)) return;
+
+    update_post_meta($post_id, 'expiry_date', sanitize_text_field($_POST['expiry_date'] ?? ''));
+    update_post_meta($post_id, 'promo_link', esc_url_raw($_POST['promo_link'] ?? ''));
+    update_post_meta($post_id, 'is_active', isset($_POST['is_active']) ? '1' : '0');
+    if (isset($_POST['promotion_media_id'])) {
+        update_post_meta($post_id, 'promotion_media_id', intval($_POST['promotion_media_id']));
+    }
+}
+
+/**
+ * Create points audit table
+ */
+function create_points_audit_table() {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'points_audit';
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE IF NOT EXISTS $table_name (
+        id bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_id bigint(20) UNSIGNED NOT NULL,
+        receipt_id bigint(20) UNSIGNED DEFAULT NULL,
+        points_change int(11) NOT NULL,
+        points_before int(11) NOT NULL,
+        points_after int(11) NOT NULL,
+        action_type varchar(50) NOT NULL,
+        reason varchar(255) DEFAULT NULL,
+        admin_id bigint(20) UNSIGNED DEFAULT NULL,
+        created_at datetime DEFAULT CURRENT_TIMESTAMP,
+        updated_at datetime DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY  (id),
+        KEY user_id (user_id),
+        KEY receipt_id (receipt_id),
+        KEY admin_id (admin_id),
+        KEY created_at (created_at)
+    ) $charset_collate;";
+
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($sql);
+}
+add_action('after_setup_theme', 'create_points_audit_table');
+
+/**
+ * Add Points Audit admin menu
+ */
+add_action('admin_menu', 'add_points_audit_menu');
+function add_points_audit_menu() {
+    add_menu_page(
+        'Points Audit',
+        'Points Audit',
+        'manage_options',
+        'points-audit',
+        'render_points_audit_page',
+        'dashicons-list-view',
+        25
+    );
+}
+
+/**
+ * Render Points Audit page
+ */
+function render_points_audit_page() {
+    global $wpdb;
+    
+    // Handle point adjustment
+    if (isset($_POST['adjust_points']) && check_admin_referer('adjust_points_nonce')) {
+        $audit_id = intval($_POST['audit_id']);
+        $new_points = intval($_POST['new_points']);
+        $adjustment_reason = sanitize_textarea_field($_POST['adjustment_reason']);
+        
+        if (empty($adjustment_reason)) {
+            echo '<div class="notice notice-error"><p>❌ Error: Reason for adjustment is required.</p></div>';
+        } elseif (strlen($adjustment_reason) < 10) {
+            echo '<div class="notice notice-error"><p>❌ Error: Please provide a detailed reason (at least 10 characters).</p></div>';
+        } else {
+            $result = adjust_audit_points($audit_id, $new_points, $adjustment_reason);
+            
+            if ($result) {
+                echo '<div class="notice notice-success is-dismissible"><p>✅ Points adjusted successfully!</p></div>';
+            } else {
+                echo '<div class="notice notice-error"><p>❌ Failed to adjust points. Please try again.</p></div>';
+            }
+        }
+    }
+    
+    $audit_table = $wpdb->prefix . 'points_audit';
+    
+    // Pagination
+    $per_page = 50;
+    $current_page = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
+    $offset = ($current_page - 1) * $per_page;
+    
+    // Get total count
+    $total_items = $wpdb->get_var("SELECT COUNT(*) FROM $audit_table");
+    $total_pages = ceil($total_items / $per_page);
+    
+    // Get audit records
+    $audits = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM $audit_table ORDER BY created_at DESC LIMIT %d OFFSET %d",
+        $per_page,
+        $offset
+    ));
+    
+    ?>
+    <div class="wrap">
+        <h1>💎 Points Audit Log</h1>
+        <p>Track and manage all loyalty points adjustments</p>
+        
+        <table class="wp-list-table widefat fixed striped">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>User</th>
+                    <th>Receipt</th>
+                    <th>Points Change</th>
+                    <th>Before</th>
+                    <th>After</th>
+                    <th>Action</th>
+                    <th>Reason</th>
+                    <th>Admin</th>
+                    <th>Date</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if (empty($audits)): ?>
+                    <tr>
+                        <td colspan="11" style="text-align: center; padding: 40px;">No audit records found</td>
+                    </tr>
+                <?php else: ?>
+                    <?php foreach ($audits as $audit): 
+                        $user = get_post($audit->user_id);
+                        $receipt = get_post($audit->receipt_id);
+                        $admin = get_userdata($audit->admin_id);
+                        
+                        $points_color = $audit->points_change >= 0 ? '#22c55e' : '#ef4444';
+                        $points_sign = $audit->points_change >= 0 ? '+' : '';
+                    ?>
+                        <tr>
+                            <td><strong>#<?php echo $audit->id; ?></strong></td>
+                            <td>
+                                <?php if ($user): ?>
+                                    <a href="<?php echo get_edit_post_link($audit->user_id); ?>">
+                                        <?php echo esc_html($user->post_title); ?>
+                                    </a>
+                                <?php else: ?>
+                                    User #<?php echo $audit->user_id; ?>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ($receipt): ?>
+                                    <a href="<?php echo get_edit_post_link($audit->receipt_id); ?>">
+                                        Receipt #<?php echo $audit->receipt_id; ?>
+                                    </a>
+                                <?php else: ?>
+                                    —
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <span style="color: <?php echo $points_color; ?>; font-weight: 600;">
+                                    <?php echo $points_sign . $audit->points_change; ?> 💎
+                                </span>
+                            </td>
+                            <td><?php echo $audit->points_before; ?></td>
+                            <td><?php echo $audit->points_after; ?></td>
+                            <td>
+                                <span style="background: #f0f0f0; padding: 4px 8px; border-radius: 4px; font-size: 11px;">
+                                    <?php echo esc_html($audit->action_type); ?>
+                                </span>
+                            </td>
+                            <td><?php echo esc_html($audit->reason); ?></td>
+                            <td>
+                                <?php echo $admin ? esc_html($admin->display_name) : 'System'; ?>
+                            </td>
+                            <td><?php echo date('Y-m-d H:i', strtotime($audit->created_at)); ?></td>
+                            <td>
+                                <?php if ($audit->receipt_id && $audit->action_type === 'receipt_approved'): ?>
+                                    <button class="button button-small edit-points-btn" 
+                                            data-audit-id="<?php echo $audit->id; ?>"
+                                            data-receipt-id="<?php echo $audit->receipt_id; ?>"
+                                            data-current-points="<?php echo $audit->points_change; ?>"
+                                            data-user-id="<?php echo $audit->user_id; ?>">
+                                        ✏️ Adjust
+                                    </button>
+                                <?php else: ?>
+                                    —
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </tbody>
+        </table>
+        
+        <?php if ($total_pages > 1): ?>
+            <div class="tablenav">
+                <div class="tablenav-pages">
+                    <?php
+                    echo paginate_links(array(
+                        'base' => add_query_arg('paged', '%#%'),
+                        'format' => '',
+                        'prev_text' => __('&laquo;'),
+                        'next_text' => __('&raquo;'),
+                        'total' => $total_pages,
+                        'current' => $current_page
+                    ));
+                    ?>
+                </div>
+            </div>
+        <?php endif; ?>
+    </div>
+    
+    <!-- Edit Points Modal -->
+    <div id="edit-points-modal" style="display:none;">
+        <div style="background: white; padding: 30px; border-radius: 8px; max-width: 600px; margin: 100px auto; box-shadow: 0 4px 20px rgba(0,0,0,0.2);">
+            <h2>✏️ Adjust Points</h2>
+            <form method="POST" id="adjust-points-form">
+                <?php wp_nonce_field('adjust_points_nonce'); ?>
+                <input type="hidden" name="adjust_points" value="1">
+                <input type="hidden" name="audit_id" id="edit-audit-id">
+                <input type="hidden" name="user_id" id="edit-user-id">
+                
+                <table class="form-table">
+                    <tr>
+                        <th>Receipt ID</th>
+                        <td><strong>#<span id="edit-receipt-id"></span></strong></td>
+                    </tr>
+                    <tr>
+                        <th>Current Points</th>
+                        <td><span id="edit-current-points" style="font-size: 18px; font-weight: 600; color: #2271b1;"></span> 💎</td>
+                    </tr>
+                    <tr>
+                        <th><label for="edit-new-points">New Points *</label></th>
+                        <td>
+                            <input type="number" name="new_points" id="edit-new-points" min="0" required style="width: 150px; padding: 8px; font-size: 16px;">
+                            💎
+                            <p class="description" id="points-difference" style="margin-top: 8px; font-weight: 600;"></p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th><label for="adjustment-reason">Reason for Adjustment *</label></th>
+                        <td>
+                            <textarea name="adjustment_reason" id="adjustment-reason" rows="4" required style="width: 100%; padding: 8px;" placeholder="e.g., Incorrect points calculation, Receipt reviewed again, Customer dispute resolved..."></textarea>
+                            <p class="description">Explain why you're adjusting these points. This will be logged in the audit trail.</p>
+                        </td>
+                    </tr>
+                </table>
+                
+                <div style="background: #f0f6fc; padding: 15px; border-left: 4px solid #2271b1; margin: 20px 0;">
+                    <p style="margin: 0; font-weight: 600;">⚠️ Important:</p>
+                    <p style="margin: 8px 0 0 0;">This will automatically adjust the user's total points and create a new audit entry.</p>
+                </div>
+                
+                <p style="margin-top: 25px;">
+                    <button type="submit" class="button button-primary" style="padding: 8px 20px; height: auto; font-size: 14px;">
+                        💾 Save Adjustment
+                    </button>
+                    <button type="button" class="button" id="cancel-edit" style="margin-left: 10px;">
+                        Cancel
+                    </button>
+                </p>
+            </form>
+        </div>
+    </div>
+
+    <style>
+        #edit-points-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 999999;
+            overflow-y: auto;
+        }
+        
+        #edit-points-modal .form-table th {
+            width: 180px;
+            padding: 15px 10px 15px 0;
+            font-weight: 600;
+        }
+        
+        #edit-points-modal .form-table td {
+            padding: 15px 10px;
+        }
+    </style>
+
+    <script>
+    jQuery(document).ready(function($) {
+        $('.edit-points-btn').on('click', function() {
+            var auditId = $(this).data('audit-id');
+            var receiptId = $(this).data('receipt-id');
+            var currentPoints = $(this).data('current-points');
+            var userId = $(this).data('user-id');
+            
+            $('#edit-audit-id').val(auditId);
+            $('#edit-user-id').val(userId);
+            $('#edit-receipt-id').text(receiptId);
+            $('#edit-current-points').text(currentPoints);
+            $('#edit-new-points').val(currentPoints);
+            $('#adjustment-reason').val('');
+            $('#points-difference').text('');
+            
+            $('#edit-points-modal').show();
+        });
+        
+        // Calculate and show difference
+        $('#edit-new-points').on('input', function() {
+            var currentPoints = parseInt($('#edit-current-points').text());
+            var newPoints = parseInt($(this).val()) || 0;
+            var difference = newPoints - currentPoints;
+            
+            if (difference === 0) {
+                $('#points-difference').html('No change');
+            } else if (difference > 0) {
+                $('#points-difference').html('<span style="color: #22c55e;">+' + difference + ' points will be added</span>');
+            } else {
+                $('#points-difference').html('<span style="color: #ef4444;">' + difference + ' points will be deducted</span>');
+            }
+        });
+        
+        $('#cancel-edit').on('click', function() {
+            $('#edit-points-modal').hide();
+        });
+        
+        // Close modal on background click
+        $('#edit-points-modal').on('click', function(e) {
+            if (e.target === this) {
+                $(this).hide();
+            }
+        });
+        
+        // Validate form before submit
+        $('#adjust-points-form').on('submit', function(e) {
+            var reason = $('#adjustment-reason').val().trim();
+            if (reason.length < 10) {
+                e.preventDefault();
+                alert('Please provide a detailed reason (at least 10 characters).');
+                return false;
+            }
+            
+            var currentPoints = parseInt($('#edit-current-points').text());
+            var newPoints = parseInt($('#edit-new-points').val());
+            
+            if (currentPoints === newPoints) {
+                e.preventDefault();
+                alert('New points must be different from current points.');
+                return false;
+            }
+            
+            if (!confirm('Are you sure you want to adjust these points? This action will be logged.')) {
+                e.preventDefault();
+                return false;
+            }
+        });
+    });
+    </script>
+    <?php
+}
+
+/**
+ * Adjust points from audit record
+ */
+function adjust_audit_points($audit_id, $new_points, $adjustment_reason) {
+    global $wpdb;
+    $audit_table = $wpdb->prefix . 'points_audit';
+    
+    // Get original audit record
+    $audit = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM $audit_table WHERE id = %d",
+        $audit_id
+    ));
+    
+    if (!$audit) {
+        return false;
+    }
+    
+    $old_points = $audit->points_change;
+    $points_difference = $new_points - $old_points;
+    
+    if ($points_difference == 0) {
+        return false; // No change needed
+    }
+    
+    // Update user's total points
+    $user_id = $audit->user_id;
+    $current_total = intval(get_post_meta($user_id, 'loyalty_points', true));
+    $new_total = $current_total + $points_difference;
+    
+    // Don't allow negative points
+    if ($new_total < 0) {
+        return false;
+    }
+    
+    update_post_meta($user_id, 'loyalty_points', $new_total);
+    
+    // Update receipt points
+    if ($audit->receipt_id) {
+        update_post_meta($audit->receipt_id, 'loyalty_points', $new_points);
+    }
+    
+    // Get admin info
+    $admin = wp_get_current_user();
+    $admin_name = $admin->display_name;
+    
+    // Create detailed reason text
+    $detailed_reason = sprintf(
+        "Points adjusted from %d to %d by %s. Reason: %s (Original audit #%d)",
+        $old_points,
+        $new_points,
+        $admin_name,
+        $adjustment_reason,
+        $audit_id
+    );
+    
+    // Create new audit entry for the adjustment
+    $inserted = $wpdb->insert(
+        $audit_table,
+        array(
+            'user_id' => $user_id,
+            'receipt_id' => $audit->receipt_id,
+            'points_change' => $points_difference,
+            'points_before' => $current_total,
+            'points_after' => $new_total,
+            'action_type' => 'points_adjusted',
+            'reason' => $detailed_reason,
+            'admin_id' => get_current_user_id(),
+            'created_at' => current_time('mysql')
+        ),
+        array('%d', '%d', '%d', '%d', '%d', '%s', '%s', '%d', '%s')
+    );
+    
+    return $inserted !== false;
+}
+
 
 
 /**

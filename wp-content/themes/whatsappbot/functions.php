@@ -1,4 +1,7 @@
 <?php
+
+use function PHPSTORM_META\type;
+
 /**
  * Customer Portal Theme Functions
  */
@@ -925,6 +928,176 @@ function custom_client_logout()
 }
 
 /**
+ * Extract brand from item name
+ * This is a simple implementation - you can enhance it with a brand database
+ */
+function extract_brand_from_item($item_name) {
+    // Common brand patterns (expand this list based on your market)
+    $known_brands = array(
+        // Beverages
+        'Coca Cola', 'Coca-Cola', 'Coke',
+        'Pepsi',
+        'Sprite',
+        'Fanta',
+        '7UP', '7-UP',
+        'Red Bull',
+        'Monster',
+        'Minute Maid',
+        'Tropicana',
+        
+        // Food & Snacks
+        'Lays', 'Lay\'s',
+        'Doritos',
+        'Pringles',
+        'Kit Kat',
+        'Snickers',
+        'M&M', 'M&Ms',
+        'Cadbury',
+        'Dairy Milk',
+        'Oreo',
+        'Ritz',
+        'Kellogg', 'Kelloggs',
+        'Quaker',
+        
+        // Personal Care
+        'Dove',
+        'Lux',
+        'Ponds', 'Pond\'s',
+        'Fair & Lovely', 'Fair and Lovely',
+        'Sunsilk',
+        'Colgate',
+        'Sensodyne',
+        'Oral-B',
+        'Pampers',
+        'Huggies',
+        'Johnson', 'Johnson\'s',
+        'Nivea',
+        'Garnier',
+        'Loreal', 'L\'Oreal', 'L\'Oréal',
+        'Pantene',
+        'Head & Shoulders',
+        'Gillette',
+        
+        // Household
+        'Tide',
+        'Ariel',
+        'Surf',
+        'OMO',
+        'Dettol',
+        'Lifebuoy',
+        'Vim',
+        'Comfort',
+        'Downy',
+        
+        // Food Brands
+        'Nestle', 'Nestlé',
+        'Maggi',
+        'Milo',
+        'Lipton',
+        'Knorr',
+        'Del Monte',
+        'Heinz',
+        'Kraft',
+        'Nescafe', 'Nescafé',
+        'Kikkoman',
+        'Lee Kum Kee',
+        
+        // Dairy
+        'Anchor',
+        'Meadow Gold',
+        'Dutch Mill',
+        'Meiji',
+        'Foremost',
+        
+        // Thai Brands (add local brands)
+        'Mama',
+        'Yum Yum',
+        'Thai Tea',
+        'Tipco',
+        'Oishi',
+        'Tao Kae Noi',
+        'Singha',
+        'Chang',
+        'Leo',
+        
+        // Singapore Brands
+        'Tiger',
+        'Yakult',
+        'F&N',
+        'Pokka',
+        'Ayam',
+    );
+    
+    // Normalize item name for comparison
+    $item_upper = strtoupper($item_name);
+    $item_lower = strtolower($item_name);
+    
+    // Check for known brands (case-insensitive)
+    foreach ($known_brands as $brand) {
+        if (stripos($item_name, $brand) !== false) {
+            return $brand;
+        }
+    }
+    
+    // Try to extract first word as brand (fallback)
+    // This assumes brand name is usually the first word
+    $words = preg_split('/[\s\-_]+/', trim($item_name));
+    if (!empty($words[0]) && strlen($words[0]) > 2) {
+        // Skip common non-brand words
+        $skip_words = array('the', 'and', 'or', 'with', 'for', 'pack', 'bottle', 'can', 'box');
+        $first_word = strtolower($words[0]);
+        
+        if (!in_array($first_word, $skip_words) && !is_numeric($first_word)) {
+            return ucfirst($first_word);
+        }
+    }
+    
+    // If still no brand found, return "Unknown"
+    return 'Unknown';
+}
+
+function parse_receipt_items($items_text) {
+
+    if (empty($items_text) || !is_string($items_text)) {
+        return array();
+    }
+
+    $parsed_items = array();
+    $lines = explode("\n", $items_text);
+
+    foreach ($lines as $line) {
+
+        $line = trim($line);
+        if ($line === '') {
+            continue;
+        }
+
+        // Extract last number as price
+        if (preg_match('/^(.+?)\s+([\d,]+(?:\.\d+)?)$/', $line, $matches)) {
+
+            $item_name = trim($matches[1]);
+            $price = floatval(str_replace(',', '', $matches[2]));
+            $quantity = 1;
+
+            // Only treat as quantity if it's a clean integer at end
+            if (preg_match('/^(.*)\s+(\d+)$/', $item_name, $qty_matches)) {
+                $item_name = trim($qty_matches[1]);
+                $quantity = intval($qty_matches[2]);
+            }
+
+            $parsed_items[] = array(
+                'name' => $item_name,
+                'quantity' => $quantity,
+                'price' => $price,
+                'total' => $price * $quantity
+            );
+        }
+    }
+
+    return $parsed_items;
+}
+
+/**
  * Get Comprehensive Analytics Data
  */
 add_action('rest_api_init', function () {
@@ -957,9 +1130,15 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
 
     // Build query args
     $query_args = array(
-        'post_type' => 'receipt',
-        'post_status' => array('publish', 'pending', 'draft'),
+        'post_type'      => 'receipt',
         'posts_per_page' => -1,
+        'meta_query'     => array(
+            array(
+                'key'     => 'receipt_status',
+                'value'   => array('accepted', 'rejected', 'pending'),
+                'compare' => 'IN',
+            )
+        )
     );
 
     if (!empty($start_date) && !empty($end_date)) {
@@ -1003,7 +1182,9 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
         }
         
         // Process based on status
-        if ($status === 'publish') {
+        $receipt_status = get_post_meta($receipt_id, 'receipt_status', true) ?: 'pending';
+
+        if ($receipt_status === 'accepted') {
             $valid_receipts++;
             $receipts_by_date[$date]['valid']++;
             
@@ -1023,7 +1204,7 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
                 }
                 $merchant_counts[$merchant]++;
             }
-        } else {
+        } elseif ($receipt_status === 'rejected') {
             $rejected_receipts++;
             $receipts_by_date[$date]['rejected']++;
             
@@ -1175,7 +1356,7 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
         $fraud_decision = get_post_meta($receipt->ID, 'fraud_decision', true);
         if (!empty($fraud_decision)) {
             $fraud_decision = strtolower($fraud_decision); // Normalize to lowercase
-            if ($fraud_decision === 'approve' || $fraud_decision === 'approved') {
+            if ($fraud_decision === 'accept' || $fraud_decision === 'accepted') {
                 $fraud_decisions['approve']++;
             } elseif ($fraud_decision === 'review') {
                 $fraud_decisions['review']++;
@@ -1268,19 +1449,24 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
     
     foreach ($receipts_per_user as $user_id => $count) {
         // Get user's first receipt ever
-    $first_receipt = new WP_Query(array(
-        'post_type' => 'receipt',
-        'meta_query' => array(
-            array(
-                'key' => 'profile_id',
-                'value' => $user_id,
-                'compare' => '='
-            )
-        ),
-        'posts_per_page' => 1,
-        'orderby' => 'date',
-        'order' => 'ASC'
-    ));
+        $first_receipt = new WP_Query(array(
+            'post_type' => 'receipt',
+            'meta_query' => array(
+                array(
+                    'key' => 'profile_id',
+                    'value' => $user_id,
+                    'compare' => '='
+                ),
+                array(
+                    'key'     => 'receipt_status',
+                    'value'   => 'accepted',
+                    'compare' => '='
+                )
+            ),
+            'posts_per_page' => 1,
+            'orderby' => 'date',
+            'order' => 'ASC'
+        ));
     
     if ($first_receipt->have_posts()) {
         $first_date = get_the_date('Y-m-d', $first_receipt->posts[0]);
@@ -1292,6 +1478,11 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
                 array(
                     'key' => 'profile_id',
                     'value' => $user_id,
+                    'compare' => '='
+                ),
+                array(
+                    'key'     => 'receipt_status',
+                    'value'   => 'accepted',
                     'compare' => '='
                 )
             ),
@@ -1340,12 +1531,17 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
             // Check if user has approved receipt
             $approved_receipts = new WP_Query(array(
                 'post_type' => 'receipt',
-                'post_status' => 'publish',
+                
                 'meta_query' => array(
                     array(
                         'key' => 'profile_id',
                         'value' => $user_id,
                         'compare' => '='
+                    ),
+                    array(
+                    'key'     => 'receipt_status',
+                    'value'   => 'accepted',
+                    'compare' => '='
                     )
                 ),
                 'posts_per_page' => 1
@@ -1386,6 +1582,31 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
         $funnel_points_to_redeemed = $users_with_points > 0 
             ? round(($users_who_redeemed / $users_with_points) * 100, 1) 
             : 0;
+
+        // ========================================
+        // RECEIPTS WITH POINTS (for conversion rate)
+        // ========================================
+
+        $receipts_with_points = 0;
+
+        foreach ($all_receipts as $receipt) {
+
+            $receipt_status = get_post_meta($receipt->ID, 'receipt_status', true);
+
+            if ($receipt_status === 'accepted') {
+
+                $points = intval(get_post_meta($receipt->ID, 'loyalty_points', true));
+
+                if ($points > 0) {
+                    $receipts_with_points++;
+                }
+            }
+        }
+
+        // Calculate conversion rate based on receipts that earned points
+        $conversion_rate = $total_receipts > 0 
+            ? round(($receipts_with_points / $total_receipts) * 100, 1) 
+            : 0;
             
     // ========================================
     // 5. SUBMISSION TIME HEATMAP
@@ -1414,6 +1635,233 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
 
     $display_start_date = $start_date ?: 'All time';
     $display_end_date = $end_date ?: 'Present';
+
+    // ========================================
+    // 6. ITEM & BASKET ANALYTICS (ENHANCED)
+    // ========================================
+
+    $all_items = array();
+    $basket_sizes = array(); // Number of items per receipt
+    $basket_totals = array(); // Total amount per receipt
+    $approved_basket_sizes = array(); // Only approved receipts
+    $approved_basket_totals = array(); // Only approved receipts
+    $brand_data = array(); // Track brand statistics
+    $merchant_basket_data = array(); // Basket data per merchant
+
+    foreach ($all_receipts as $receipt) {
+
+        $receipt_id = $receipt->ID;
+        $receipt_status = get_post_meta($receipt->ID, 'receipt_status', true);
+
+        $receipt_items = get_post_meta($receipt_id, 'receipt_items', true);
+        $receipt_total = floatval(get_post_meta($receipt_id, 'total_amount', true));
+        $merchant      = get_post_meta($receipt_id, 'store_name', true);
+
+        // Ensure items is always an array
+        if (!is_array($receipt_items) || empty($receipt_items)) {
+            continue;
+        }
+
+        $item_count = count($receipt_items);
+
+        // =========================
+        // Basket (All Receipts)
+        // =========================
+        $basket_sizes[] = $item_count;
+
+        if ($receipt_total > 0) {
+            $basket_totals[] = $receipt_total;
+        }
+
+        // =========================
+        // Merchant Init
+        // =========================
+        if (!empty($merchant)) {
+
+            if (!isset($merchant_basket_data[$merchant])) {
+                $merchant_basket_data[$merchant] = array(
+                    'basket_sizes'   => array(),
+                    'basket_totals'  => array(),
+                    'receipt_count'  => 0,
+                    'approved_count' => 0
+                );
+            }
+
+            $merchant_basket_data[$merchant]['basket_sizes'][] = $item_count;
+
+            if ($receipt_total > 0) {
+                $merchant_basket_data[$merchant]['basket_totals'][] = $receipt_total;
+            }
+
+            $merchant_basket_data[$merchant]['receipt_count']++;
+        }
+
+        // =========================
+        // Approved Only Analytics
+        // =========================
+        if ($receipt_status !== 'accepted') {
+            continue;
+        }
+
+        $approved_basket_sizes[] = $item_count;
+
+        if ($receipt_total > 0) {
+            $approved_basket_totals[] = $receipt_total;
+        }
+
+        if (!empty($merchant)) {
+            $merchant_basket_data[$merchant]['approved_count']++;
+        }
+
+        // =========================
+        // Item-Level Analytics
+        // =========================
+        foreach ($receipt_items as $item) {
+
+            // Skip legacy string items safely
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $item_name     = sanitize_text_field($item['name'] ?? '');
+            $item_quantity = intval($item['quantity'] ?? 1);
+            $item_price    = floatval($item['price'] ?? 0);
+            $item_total    = $item_price * $item_quantity;
+
+            if ($item_price <= 0) {
+                continue;
+            }
+
+            $brand = extract_brand_from_item($item_name);
+
+            $all_items[] = array(
+                'name'     => $item_name,
+                'brand'    => $brand ?: 'Unknown',
+                'quantity' => $item_quantity,
+                'price'    => $item_price,
+                'total'    => $item_total,
+                'merchant' => $merchant
+            );
+
+            // =========================
+            // Brand Aggregation
+            // =========================
+            if (!empty($brand) && $brand !== 'Unknown') {
+
+                if (!isset($brand_data[$brand])) {
+                    $brand_data[$brand] = array(
+                        'total_purchases' => 0,
+                        'total_amount'    => 0,
+                        'item_count'      => 0
+                    );
+                }
+
+                $brand_data[$brand]['total_purchases']++;
+                $brand_data[$brand]['total_amount'] += $item_total;
+                $brand_data[$brand]['item_count'] += $item_quantity;
+            }
+        }
+    }
+
+    // Calculate general averages (all receipts)
+    $avg_basket_size = !empty($basket_sizes) 
+        ? round(array_sum($basket_sizes) / count($basket_sizes), 1) 
+        : 0;
+
+    $avg_basket_total = !empty($basket_totals) 
+        ? round(array_sum($basket_totals) / count($basket_totals), 2) 
+        : 0;
+
+    // Calculate approved receipts averages
+    $avg_approved_basket_size = !empty($approved_basket_sizes) 
+        ? round(array_sum($approved_basket_sizes) / count($approved_basket_sizes), 1) 
+        : 0;
+
+    $avg_approved_basket_total = !empty($approved_basket_totals) 
+        ? round(array_sum($approved_basket_totals) / count($approved_basket_totals), 2) 
+        : 0;
+
+    $avg_item_price = !empty($all_items) 
+        ? round(array_sum(array_column($all_items, 'price')) / count($all_items), 2) 
+        : 0;
+
+    // Calculate average purchase ratio (item price vs basket total)
+    $item_to_basket_ratio = $avg_approved_basket_total > 0 
+        ? round(($avg_item_price / $avg_approved_basket_total) * 100, 1) 
+        : 0;
+
+    // Process merchant basket data
+    $merchant_analytics = array();
+    foreach ($merchant_basket_data as $merchant => $data) {
+        $avg_merchant_basket_size = !empty($data['basket_sizes']) 
+            ? round(array_sum($data['basket_sizes']) / count($data['basket_sizes']), 1) 
+            : 0;
+        
+        $avg_merchant_basket_total = !empty($data['basket_totals']) 
+            ? round(array_sum($data['basket_totals']) / count($data['basket_totals']), 2) 
+            : 0;
+        
+        $merchant_analytics[$merchant] = array(
+            'merchant' => $merchant,
+            'avg_basket_size' => $avg_merchant_basket_size,
+            'avg_basket_total' => $avg_merchant_basket_total,
+            'total_receipts' => $data['receipt_count'],
+            'approved_receipts' => $data['approved_count']
+        );
+    }
+
+    // Sort merchants by basket size
+    uasort($merchant_analytics, function($a, $b) {
+        return $b['avg_basket_size'] <=> $a['avg_basket_size'];
+    });
+
+    $top_merchants_by_basket = array_slice($merchant_analytics, 0, 10, true);
+
+    // Sort brands by total amount
+    uasort($brand_data, function($a, $b) {
+        return $b['total_amount'] <=> $a['total_amount'];
+    });
+
+    // Calculate average cost per brand
+    $brand_analytics = array();
+    foreach ($brand_data as $brand => $data) {
+        $brand_analytics[$brand] = array(
+            'brand' => $brand,
+            'total_purchases' => $data['total_purchases'],
+            'total_amount' => round($data['total_amount'], 2),
+            'avg_purchase_cost' => round($data['total_amount'] / $data['total_purchases'], 2),
+            'total_items' => $data['item_count']
+        );
+    }
+
+    // Get top brands
+    $top_brands = array_slice($brand_analytics, 0, 10, true);
+
+    // Most expensive items
+    usort($all_items, function($a, $b) {
+        return $b['price'] <=> $a['price'];
+    });
+    $most_expensive_items = array_slice($all_items, 0, 10);
+
+    // Most purchased items (by name)
+    $item_frequency = array();
+    foreach ($all_items as $item) {
+        $name = $item['name'];
+        if (!isset($item_frequency[$name])) {
+            $item_frequency[$name] = array(
+                'name' => $name,
+                'count' => 0,
+                'total_amount' => 0
+            );
+        }
+        $item_frequency[$name]['count']++;
+        $item_frequency[$name]['total_amount'] += $item['total'];
+    }
+
+    uasort($item_frequency, function($a, $b) {
+        return $b['count'] <=> $a['count'];
+    });
+    $most_purchased_items = array_slice($item_frequency, 0, 10, true);
     
     // ========================================
     // RETURN COMPREHENSIVE DATA
@@ -1440,7 +1888,8 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
             'active_users' => $active_user_count,
             'total_users' => $total_users,
             'total_revenue' => number_format($total_revenue, 2, '.', ''),
-            'conversion_rate' => $funnel_submitted_to_approved
+            'conversion_rate' => $conversion_rate,
+            'receipts_with_points' => $receipts_with_points
         ),
         
         // Charts
@@ -1497,6 +1946,40 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
                 'approved_to_points_rate' => $funnel_approved_to_points,
                 'points_to_redeemed_rate' => $funnel_points_to_redeemed
             )
+        ),
+
+        // Item & Basket Analytics
+        'item_analytics' => array(
+            // General basket stats (all receipts)
+            'avg_basket_size' => $avg_basket_size,
+            'avg_basket_total' => $avg_basket_total,
+            'total_baskets_analyzed' => count($basket_sizes),
+            
+            // Approved receipts only
+            'avg_approved_basket_size' => $avg_approved_basket_size,
+            'avg_approved_basket_total' => $avg_approved_basket_total,
+            'total_approved_baskets' => count($approved_basket_sizes),
+            
+            // Item pricing
+            'avg_item_price' => $avg_item_price,
+            'item_to_basket_ratio' => $item_to_basket_ratio,
+            'total_items_analyzed' => count($all_items),
+        ),
+
+        'merchant_basket_analytics' => array(
+            'top_merchants_by_basket_size' => array_values($top_merchants_by_basket),
+            'total_merchants' => count($merchant_analytics)
+        ),
+
+        'brand_analytics' => array(
+            'top_brands' => array_values($top_brands),
+            'total_brands' => count($brand_data)
+        ),
+
+        'item_insights' => array(
+            'most_expensive' => $most_expensive_items,
+            'most_purchased' => array_values($most_purchased_items),
+            'receipt_items_temp' => empty($receipt_items)
         )
     );
 }

@@ -29,6 +29,9 @@ function custom_allow_image_uploads($mimes) {
     $mimes['jpeg'] = 'image/jpeg';
     $mimes['png']  = 'image/png';
     $mimes['gif']  = 'image/gif';
+    $mimes['mp4']  = 'video/mp4';
+    $mimes['mov']  = 'video/quicktime';
+    $mimes['webm'] = 'video/webm';
     return $mimes;
 }
 
@@ -176,6 +179,7 @@ function custom_handle_upload(WP_REST_Request $request)
         update_post_meta($receipt_id, 'profile_id', $profile_id);
         update_post_meta($receipt_id, 'total_images', max(1, $total_images));
         update_post_meta($receipt_id, 'additional_images', []);
+        update_post_meta($receipt_id, 'receipt_status', 'pending');
 
         return [
             'success'          => true,
@@ -267,8 +271,31 @@ function custom_update_receipt_details(WP_REST_Request $request)
     update_post_meta($receipt_id, 'currency', sanitize_text_field($currency));
     update_post_meta($receipt_id, 'raw_ocr_text', $raw_text);
 
+    if (is_string($items)) {
+        $decoded = json_decode($items, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            $items = $decoded;
+        }
+    }
+
     if (is_array($items)) {
-        update_post_meta($receipt_id, 'receipt_items', $items);
+
+        $clean_items = [];
+
+        foreach ($items as $item) {
+
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $clean_items[] = [
+                'name'     => sanitize_text_field($item['name'] ?? ''),
+                'price'    => floatval($item['price'] ?? 0),
+                'quantity' => intval($item['quantity'] ?? 1),
+            ];
+        }
+
+        update_post_meta($receipt_id, 'receipt_items', $clean_items);
     }
 
     // Fraud metadata
@@ -380,6 +407,14 @@ function add_receipt_meta_box()
         'normal',                  // Context
         'high'                     // Priority
     );
+//     add_meta_box(
+//     'receipt_status_meta',
+//     'Receipt Status',
+//     'receipt_status_meta_callback',
+//     'receipt',
+//     'side',
+//     'high'
+// );
 }
 
 function display_receipt_meta_box($post)
@@ -395,6 +430,24 @@ function display_receipt_meta_box($post)
     
     // Get user's total loyalty points
     $user_total_points = get_post_meta($profile_id, 'loyalty_points', true);
+
+    $current_status = get_post_meta($post->ID, 'receipt_status', true) ?: 'pending';
+    $rejection_reason = get_post_meta($post->ID, 'rejection_reason', true);
+    $custom_rejection_note = get_post_meta($post->ID, 'custom_rejection_note', true);
+
+    // Predefined rejection reasons
+    $rejection_reasons = array(
+        'duplicate_receipt' => '🔁 Duplicate Receipt',
+        'receipt_too_old' => '📅 Receipt Older Than 14 Days',
+        'non_singapore_receipt' => '🌍 Not a Singapore Receipt',
+        'missing_information' => '📋 Missing Required Information',
+        'poor_image_quality' => '📷 Poor Image Quality / Unreadable',
+        'tampered_receipt' => '⚠️ Suspected Tampering / Edited Receipt',
+        'invalid_merchant' => '🏪 Invalid or Unsupported Merchant',
+        'fraud_detected' => '🚫 Fraud Detected',
+        'amount_mismatch' => '💰 Amount Mismatch / Inconsistent Data',
+        'other' => '❓ Other Reason'
+    );
 
     echo "<p><strong>User:</strong> $username</p>";
     echo "<p><strong>Phone:</strong> $phone</p>";
@@ -428,7 +481,7 @@ function display_receipt_meta_box($post)
         <?php endif; ?>
     </div>
     <?php
-}
+    }
 
     // Loyalty points input with button
     ?>
@@ -479,12 +532,53 @@ function display_receipt_meta_box($post)
             color: #721c24;
             display: inline-block;
         }
+        #receipt_status_meta select,
+        #receipt_status_meta textarea {
+            font-size: 14px;
+        }
+        #receipt_status_meta label {
+            font-weight: 600;
+            color: #1d2327;
+        }
     </style>
     
     <div class="loyalty-points-row">
         <label for="loyalty_points">Loyalty Points to Add:</label>
         <input type="number" id="loyalty_points" name="loyalty_points" value="<?php echo esc_attr($loyalty_points); ?>" min="0" />
-        <button type="button" id="update-points-btn" class="update-points-btn" 
+        
+    </div>
+    <p class="description">Enter points to add to user's account. Click "Update & Notify" to save and send WhatsApp notification.</p>
+    <p>
+        <label for="receipt_status"><strong>Status:</strong></label><br>
+        <select id="receipt_status" name="receipt_status" style="width: 100%; margin-top: 8px; padding: 8px;">
+            <option value="pending" <?php selected($current_status, 'pending'); ?>>⏳ Pending Review</option>
+            <option value="accepted" <?php selected($current_status, 'accepted'); ?>>✅ Accepted</option>
+            <option value="rejected" <?php selected($current_status, 'rejected'); ?>>❌ Rejected</option>
+        </select>
+    </p>
+    
+    <div id="rejection_reason_field" style="<?php echo $current_status === 'rejected' ? '' : 'display:none;'; ?>">
+        <p>
+            <label for="rejection_reason"><strong>Rejection Reason:</strong></label><br>
+            <select id="rejection_reason" name="rejection_reason" style="width: 100%; margin-top: 8px; padding: 8px;">
+                <option value="">-- Select Reason --</option>
+                <?php foreach ($rejection_reasons as $value => $label): ?>
+                    <option value="<?php echo esc_attr($value); ?>" <?php selected($rejection_reason, $value); ?>>
+                        <?php echo esc_html($label); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </p>
+        
+        <div id="custom_note_field" style="<?php echo $rejection_reason === 'other' ? '' : 'display:none;'; ?>">
+            <p>
+                <label for="custom_rejection_note"><strong>Custom Note:</strong></label><br>
+                <textarea id="custom_rejection_note" name="custom_rejection_note" rows="3" style="width: 100%; margin-top: 8px; padding: 8px;" placeholder="Explain the reason for rejection..."><?php echo esc_textarea($custom_rejection_note); ?></textarea>
+            </p>
+        </div>
+    </div>
+
+    <button type="button" id="update-points-btn" class="update-points-btn" 
                 data-receipt-id="<?php echo esc_attr($post->ID); ?>"
                 data-profile-id="<?php echo esc_attr($profile_id); ?>"
                 data-phone="<?php echo esc_attr($phone); ?>"
@@ -492,9 +586,6 @@ function display_receipt_meta_box($post)
             💎 Update & Notify
         </button>
         <span id="loyalty-status"></span>
-    </div>
-    <p class="description">Enter points to add to user's account. Click "Update & Notify" to save and send WhatsApp notification.</p>
-    
     <div id="receipt-image-modal" style="
         display:none;
         position:fixed;
@@ -514,6 +605,8 @@ function display_receipt_meta_box($post)
     jQuery(document).ready(function($) {
     const modal = document.getElementById('receipt-image-modal');
     const modalImg = document.getElementById('receipt-modal-img');
+    const rejectionReasonEl = document.getElementById('rejection_reason');
+    const customNoteEl = document.getElementById('custom_rejection_note');
 
     document.querySelectorAll('.receipt-click-image').forEach(img => {
         img.addEventListener('click', function () {
@@ -541,14 +634,60 @@ function display_receipt_meta_box($post)
             var username = btn.data('username');
             var points = $('#loyalty_points').val();
             var statusDiv = $('#loyalty-status');
-            
-            if (!points || points <= 0) {
-                statusDiv.removeClass('success').addClass('error').text('❌ Please enter valid points').show();
-                return;
+
+            var receiptStatus = document.getElementById('receipt_status').value;
+            var rejectionReason = document.getElementById('rejection_reason') 
+                ? document.getElementById('rejection_reason').value 
+                : '';
+            var customNote = document.getElementById('custom_rejection_note') 
+                ? document.getElementById('custom_rejection_note').value 
+                : '';
+
+            if (receiptStatus === 'accepted') {
+
+                // Clear rejection fields
+                if (rejectionReasonEl) rejectionReasonEl.value = '';
+                if (customNoteEl) customNoteEl.value = '';
+
+                // Hide rejection UI
+                $('#rejection_reason_field').slideUp();
+
+                if (!points || points <= 0) {
+                    statusDiv.removeClass('success').addClass('error').text('❌ Please enter valid points').show();
+                    return;
+                }
             }
+            
+            // if (!points || points <= 0) {
+            //     statusDiv.removeClass('success').addClass('error').text('❌ Please enter valid points').show();
+            //     return;
+            // }
             
             btn.prop('disabled', true).text('Processing...');
             statusDiv.hide();
+
+            // console.log('=== DEBUG RECEIPT UPDATE ===');
+            // console.log('Receipt ID:', receiptId);
+            // console.log('Profile ID:', profileId);
+            // console.log('Phone:', phone);
+            // console.log('Username:', username);
+            // console.log('Points:', points);
+            // console.log('Receipt Status:', receiptStatus);
+            // console.log('Rejection Reason:', rejectionReason);
+            // console.log('Custom Note:', customNote);
+            // console.log('============================');
+
+            // // Optional: show everything as one object (cleaner)
+            // console.log({
+            //     receipt_id: receiptId,
+            //     profile_id: profileId,
+            //     phone: phone,
+            //     username: username,
+            //     points: points,
+            //     receipt_status: receiptStatus,
+            //     rejection_reason: rejectionReason,
+            //     custom_rejection_note: customNote
+            // });
             
             $.ajax({
                 url: '<?php echo admin_url('admin-ajax.php'); ?>',
@@ -558,6 +697,9 @@ function display_receipt_meta_box($post)
                     receipt_id: receiptId,
                     profile_id: profileId,
                     points: points,
+                    receipt_status: receiptStatus,
+                    rejection_reason: rejectionReason,
+                    custom_rejection_note: customNote,
                     nonce: '<?php echo wp_create_nonce('update_loyalty_points_nonce'); ?>'
                 },
                 success: function(response) {
@@ -580,8 +722,239 @@ function display_receipt_meta_box($post)
             });
         });
     });
+
+    const receiptStatus = document.getElementById('receipt_status');
+    const rejectionReason = document.getElementById('rejection_reason');
+    const rejectionReasonField = document.getElementById('rejection_reason_field');
+    const customNoteField = document.getElementById('custom_note_field');
+
+    // Show/hide rejection reason field based on receipt status
+    receiptStatus.addEventListener('change', function () {
+        if (this.value === 'rejected') {
+            rejectionReasonField.style.display = 'block';
+        } else {
+            rejectionReasonField.style.display = 'none';
+        }
+    });
+
+    // Show/hide custom note field based on rejection reason
+    rejectionReason.addEventListener('change', function () {
+        if (this.value === 'other') {
+            customNoteField.style.display = 'block';
+        } else {
+            customNoteField.style.display = 'none';
+        }
+    });
+    
     </script>
     <?php
+}
+
+function receipt_status_meta_callback($post) {
+    wp_nonce_field('receipt_status_meta_box', 'receipt_status_meta_box_nonce');
+    
+    $current_status = get_post_meta($post->ID, 'receipt_status', true) ?: 'pending';
+    $rejection_reason = get_post_meta($post->ID, 'rejection_reason', true);
+    $custom_rejection_note = get_post_meta($post->ID, 'custom_rejection_note', true);
+    
+    // Predefined rejection reasons
+    $rejection_reasons = array(
+        'duplicate_receipt' => '🔁 Duplicate Receipt',
+        'receipt_too_old' => '📅 Receipt Older Than 14 Days',
+        'non_singapore_receipt' => '🌍 Not a Singapore Receipt',
+        'missing_information' => '📋 Missing Required Information',
+        'poor_image_quality' => '📷 Poor Image Quality / Unreadable',
+        'tampered_receipt' => '⚠️ Suspected Tampering / Edited Receipt',
+        'invalid_merchant' => '🏪 Invalid or Unsupported Merchant',
+        'fraud_detected' => '🚫 Fraud Detected',
+        'amount_mismatch' => '💰 Amount Mismatch / Inconsistent Data',
+        'other' => '❓ Other Reason'
+    );
+    
+    ?>
+    <p>
+        <label for="receipt_status"><strong>Status:</strong></label><br>
+        <select id="receipt_status" name="receipt_status" style="width: 100%; margin-top: 8px; padding: 8px;">
+            <option value="pending" <?php selected($current_status, 'pending'); ?>>⏳ Pending Review</option>
+            <option value="accepted" <?php selected($current_status, 'accepted'); ?>>✅ Accepted</option>
+            <option value="rejected" <?php selected($current_status, 'rejected'); ?>>❌ Rejected</option>
+        </select>
+    </p>
+    
+    <div id="rejection_reason_field" style="<?php echo $current_status === 'rejected' ? '' : 'display:none;'; ?>">
+        <p>
+            <label for="rejection_reason"><strong>Rejection Reason:</strong></label><br>
+            <select id="rejection_reason" name="rejection_reason" style="width: 100%; margin-top: 8px; padding: 8px;">
+                <option value="">-- Select Reason --</option>
+                <?php foreach ($rejection_reasons as $value => $label): ?>
+                    <option value="<?php echo esc_attr($value); ?>" <?php selected($rejection_reason, $value); ?>>
+                        <?php echo esc_html($label); ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </p>
+        
+        <div id="custom_note_field" style="<?php echo $rejection_reason === 'other' ? '' : 'display:none;'; ?>">
+            <p>
+                <label for="custom_rejection_note"><strong>Custom Note:</strong></label><br>
+                <textarea id="custom_rejection_note" name="custom_rejection_note" rows="3" style="width: 100%; margin-top: 8px; padding: 8px;" placeholder="Explain the reason for rejection..."><?php echo esc_textarea($custom_rejection_note); ?></textarea>
+            </p>
+        </div>
+    </div>
+    
+    <script>
+    jQuery(document).ready(function($) {
+        // Show/hide rejection reason field based on status
+        $('#receipt_status').on('change', function() {
+            if ($(this).val() === 'rejected') {
+                $('#rejection_reason_field').slideDown();
+            } else {
+                $('#rejection_reason_field').slideUp();
+            }
+        });
+        
+        // Show/hide custom note field based on rejection reason
+        $('#rejection_reason').on('change', function() {
+            if ($(this).val() === 'other') {
+                $('#custom_note_field').slideDown();
+            } else {
+                $('#custom_note_field').slideUp();
+            }
+        });
+    });
+    </script>
+    
+    <style>
+        #receipt_status_meta select,
+        #receipt_status_meta textarea {
+            font-size: 14px;
+        }
+        #receipt_status_meta label {
+            font-weight: 600;
+            color: #1d2327;
+        }
+    </style>
+    <?php
+}
+
+// add_action('save_post_receipt', 'save_receipt_status_meta');
+// function save_receipt_status_meta($post_id) {
+//     if (!isset($_POST['receipt_status_meta_box_nonce'])) {
+//         return;
+//     }
+    
+//     if (!wp_verify_nonce($_POST['receipt_status_meta_box_nonce'], 'receipt_status_meta_box')) {
+//         return;
+//     }
+    
+//     if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
+//         return;
+//     }
+    
+//     if (!current_user_can('edit_post', $post_id)) {
+//         return;
+//     }
+    
+//     $old_status = get_post_meta($post_id, 'receipt_status', true);
+//     $new_status = isset($_POST['receipt_status']) ? sanitize_text_field($_POST['receipt_status']) : 'pending';
+    
+//     // Update status
+//     update_post_meta($post_id, 'receipt_status', $new_status);
+    
+//     // Update rejection reason
+//     if (isset($_POST['rejection_reason'])) {
+//         update_post_meta($post_id, 'rejection_reason', sanitize_text_field($_POST['rejection_reason']));
+//     }
+    
+//     // Update custom note
+//     if (isset($_POST['custom_rejection_note'])) {
+//         update_post_meta($post_id, 'custom_rejection_note', sanitize_textarea_field($_POST['custom_rejection_note']));
+//     }
+    
+//     // Send WhatsApp notification if status changed
+//     if ($old_status !== $new_status && in_array($new_status, array('accepted', 'rejected'))) {
+//         send_receipt_status_notification($post_id, $new_status);
+//     }
+// }
+
+/**
+ * Send WhatsApp notification when receipt status changes
+ */
+function send_receipt_status_notification($receipt_id, $status) {
+    $profile_id = get_post_meta($receipt_id, 'profile_id', true);
+    if (!$profile_id) {
+        return;
+    }
+    
+    $phone = get_post_meta($profile_id, 'phone', true);
+    if (!$phone) {
+        return;
+    }
+    
+    $webhook_url = get_option('whatsapp_webhook_url', '');
+    if (!$webhook_url) {
+        return;
+    }
+    
+    $receipt = get_post($receipt_id);
+    $store_name = get_post_meta($receipt_id, 'store_name', true);
+    $total_amount = get_post_meta($receipt_id, 'total_amount', true);
+    $receipt_id_on_receipt = get_post_meta($receipt_id, 'receipt_id_on_receipt', true);
+    
+    // Rejection reason messages
+    $rejection_messages = array(
+        'duplicate_receipt' => 'This receipt has already been submitted',
+        'receipt_too_old' => 'Receipt is older than 14 days',
+        'non_singapore_receipt' => 'Only Singapore receipts are accepted',
+        'missing_information' => 'Receipt is missing required information',
+        'poor_image_quality' => 'Image quality is too poor to read',
+        'tampered_receipt' => 'Receipt appears to have been edited or tampered with',
+        'invalid_merchant' => 'This merchant is not supported',
+        'fraud_detected' => 'Suspicious activity detected',
+        'amount_mismatch' => 'Receipt data is inconsistent',
+        'other' => get_post_meta($receipt_id, 'custom_rejection_note', true) ?: 'Receipt does not meet requirements'
+    );
+    
+    if ($status === 'accepted') {
+        $points = intval(get_post_meta($receipt_id, 'loyalty_points', true));
+        
+        wp_remote_post($webhook_url, array(
+            'headers' => array('Content-Type' => 'application/json'),
+            'body' => wp_json_encode(array(
+                'phone' => $phone,
+                'use_template' => true,
+                'template_name' => 'receipt_approved',
+                'template_params' => array(
+                    $store_name,           // {{1}}
+                    $total_amount,         // {{2}}
+                    $points                // {{3}}
+                ),
+                'message' => "✅ Receipt Approved!\n\nStore: {$store_name}\nAmount: {$total_amount}\nPoints Earned: {$points} 💎"
+            )),
+            'timeout' => 30
+        ));
+        
+    } elseif ($status === 'rejected') {
+        $rejection_reason = get_post_meta($receipt_id, 'rejection_reason', true);
+        $reason_text = isset($rejection_messages[$rejection_reason]) 
+            ? $rejection_messages[$rejection_reason] 
+            : 'Receipt does not meet requirements';
+        
+        wp_remote_post($webhook_url, array(
+            'headers' => array('Content-Type' => 'application/json'),
+            'body' => wp_json_encode(array(
+                'phone' => $phone,
+                'use_template' => true,
+                'template_name' => 'receipt_rejected',
+                'template_params' => array(
+                    $store_name ?: 'Unknown',  // {{1}}
+                    $reason_text                // {{2}}
+                ),
+                'message' => "❌ Receipt Rejected\n\nStore: {$store_name}\nReason: {$reason_text}\n\nPlease submit a valid receipt."
+            )),
+            'timeout' => 30
+        ));
+    }
 }
 
 /**
@@ -591,6 +964,8 @@ add_action('wp_ajax_update_loyalty_points', 'custom_update_loyalty_points');
 
 function custom_update_loyalty_points()
 {
+    global $wpdb;
+    
     // Verify nonce
     check_ajax_referer('update_loyalty_points_nonce', 'nonce');
     
@@ -602,86 +977,145 @@ function custom_update_loyalty_points()
     $receipt_id = isset($_POST['receipt_id']) ? intval($_POST['receipt_id']) : 0;
     $profile_id = isset($_POST['profile_id']) ? intval($_POST['profile_id']) : 0;
     $points = isset($_POST['points']) ? intval($_POST['points']) : 0;
+
+    $receipt_status = sanitize_text_field($_POST['receipt_status'] ?? '');
+    $rejection_reason = sanitize_text_field($_POST['rejection_reason'] ?? '');
+    $custom_note = sanitize_textarea_field($_POST['custom_rejection_note'] ?? '');
     
-    if (!$receipt_id || !$profile_id || $points <= 0) {
-        wp_send_json_error(array('message' => 'Invalid data'));
+    if (!$receipt_id || !$profile_id) {
+        wp_send_json_error(array('message' => 'Invalid receipt or profile ID'));
     }
-    
-    // Update receipt meta
-    update_post_meta($receipt_id, 'loyalty_points', $points);
-    
-    // Get current user points
-    $current_points = intval(get_post_meta($profile_id, 'loyalty_points', true));
-    $new_total = $current_points + $points;
-    
-    // Update user's total loyalty points
-    update_post_meta($profile_id, 'loyalty_points', $new_total);
-    
-    // Get user info for notification
+
+    // If accepted but no points
+    if ($receipt_status === 'accepted' && $points <= 0) {
+        wp_send_json_error(array(
+            'message' => 'Accepted receipts must have loyalty points greater than 0.'
+        ));
+    }
+
+    if ($receipt_status === 'rejected' && $points > 0) {
+        wp_send_json_error(array(
+            'message' => 'Rejected receipt cannot award points.'
+        ));
+    }
+
+    // Save receipt status + rejection info
+    update_post_meta($receipt_id, 'receipt_status', $receipt_status);
+    update_post_meta($receipt_id, 'rejection_reason', $rejection_reason);
+    update_post_meta($receipt_id, 'custom_rejection_note', $custom_note);
+
+    // Get user info
     $user_post = get_post($profile_id);
     $username = $user_post ? $user_post->post_title : 'User';
     $phone = get_post_meta($profile_id, 'phone', true);
-    
-    // Get receipt details
+
+    // Receipt details
     $store_name = get_post_meta($receipt_id, 'store_name', true);
     $total_amount = get_post_meta($receipt_id, 'total_amount', true);
     $currency = get_post_meta($receipt_id, 'currency', true);
-    
-    // Send WhatsApp notification
+
+    // Webhook
     $webhook_url = get_option('whatsapp_webhook_url', '');
     
-    if ($webhook_url && $phone) {
-        $message = "🎉 Congratulations {$username}!\n\n" .
-                   "You've earned {$points} loyalty points!\n\n" .
-                   "Receipt Details:\n" .
-                   "Store: {$store_name}\n" .
-                   "Amount: {$currency} {$total_amount}\n\n" .
-                   "Your Total Points: {$new_total} 💎\n\n" .
-                   "Keep collecting points for exciting rewards!";
+    if ($receipt_status === 'accepted') {
+        // Get current points BEFORE adding
+        $current_points = intval(get_post_meta($profile_id, 'loyalty_points', true));
+        $new_total = $current_points + $points;
         
-        // $response = wp_remote_post($webhook_url, array(
-        //     'headers' => array('Content-Type' => 'application/json'),
-        //     'body' => json_encode(array(
-        //         'phone' => $phone,
-        //         'message' => $message,
-        //         'receipt_id' => $receipt_id
-        //     )),
-        //     'timeout' => 30
-        // ));
+        // Update receipt points
+        update_post_meta($receipt_id, 'loyalty_points', $points);
 
-        // ✅ Template message
-        $response=wp_remote_post($webhook_url, array(
-            'headers' => array('Content-Type' => 'application/json'),
-            'body' => json_encode(array(
-                'phone' => $phone,
-                'use_template' => true,
-                'template_name' => 'loyalty_points_earned',
-                'template_params' => array(
-                    $username,
-                    $receipt_id,
-                    $store_name,
-                    $currency . ' ' . $total_amount,
-                    $points,
-                    $new_total
-                ),
+        // Update user total points
+        update_post_meta($profile_id, 'loyalty_points', $new_total);
+        update_post_meta($receipt_id, 'loyalty_points_awarded_at', current_time('mysql'));
+
+        // ✅ ADD TO AUDIT LOG
+        $audit_table = $wpdb->prefix . 'points_audit';
+        $wpdb->insert(
+            $audit_table,
+            array(
+                'user_id' => $profile_id,
                 'receipt_id' => $receipt_id,
-                'message' => $message,
-            )),
-            'timeout' => 30
-        ));
-        
-        if (is_wp_error($response)) {
-            error_log('WhatsApp notification failed: ' . $response->get_error_message());
+                'points_change' => $points,
+                'points_before' => $current_points,
+                'points_after' => $new_total,
+                'action_type' => 'receipt_approved',
+                'reason' => "Receipt #{$receipt_id} approved - {$store_name}",
+                'admin_id' => get_current_user_id(),
+                'created_at' => current_time('mysql')
+            ),
+            array('%d', '%d', '%d', '%d', '%d', '%s', '%s', '%d', '%s')
+        );
+
+        if ($webhook_url && $phone) {
+            wp_remote_post($webhook_url, array(
+                'headers' => array('Content-Type' => 'application/json'),
+                'body' => wp_json_encode(array(
+                    'phone' => $phone,
+                    'use_template' => true,
+                    'template_name' => 'receipt_approved',
+                    'template_params' => array(
+                        $store_name,
+                        $currency . ' ' . $total_amount,
+                        $points,
+                        $new_total,
+                        $receipt_id
+                    ),
+                    'message' => "✅ Receipt Approved!\n\nStore: {$store_name}\nAmount: {$currency} {$total_amount}\nPoints Earned: {$points} 💎\n\nTotal Points: {$new_total}"
+                )),
+                'timeout' => 30
+            ));
         }
+
+        wp_send_json_success(array(
+            'message' => "Receipt approved. {$points} points added.",
+            'total_points' => $new_total
+        ));
     }
-    
-    // Log the update
-    update_post_meta($receipt_id, 'loyalty_points_awarded_at', current_time('mysql'));
-    
-    wp_send_json_success(array(
-        'message' => "Added {$points} points",
-        'total_points' => $new_total
-    ));
+
+    elseif ($receipt_status === 'rejected') {
+        // Ensure no points are stored
+        update_post_meta($receipt_id, 'loyalty_points', 0);
+
+        $rejection_messages = array(
+            'duplicate_receipt' => 'Duplicate receipt submitted',
+            'receipt_too_old' => 'Receipt older than 14 days',
+            'non_singapore_receipt' => 'Not a Singapore receipt',
+            'missing_information' => 'Missing required information',
+            'poor_image_quality' => 'Image unreadable or unclear',
+            'tampered_receipt' => 'Suspected receipt tampering',
+            'invalid_merchant' => 'Unsupported merchant',
+            'fraud_detected' => 'Fraud detected',
+            'amount_mismatch' => 'Amount mismatch',
+            'other' => $custom_note ?: 'Receipt does not meet requirements'
+        );
+
+        $reason_text = isset($rejection_messages[$rejection_reason])
+            ? $rejection_messages[$rejection_reason]
+            : 'Receipt does not meet requirements';
+
+        if ($webhook_url && $phone) {
+            wp_remote_post($webhook_url, array(
+                'headers' => array('Content-Type' => 'application/json'),
+                'body' => wp_json_encode(array(
+                    'phone' => $phone,
+                    'use_template' => true,
+                    'template_name' => 'receipt_rejected',
+                    'template_params' => array(
+                        $store_name ?: 'Unknown',
+                        $reason_text
+                    ),
+                    'message' => "❌ Receipt Rejected\n\nStore: {$store_name}\nReason: {$reason_text}\n\nPlease submit a valid receipt."
+                )),
+                'timeout' => 30
+            ));
+        }
+
+        wp_send_json_success(array(
+            'message' => "Receipt rejected.",
+            'total_points' => intval(get_post_meta($profile_id, 'loyalty_points', true))
+        ));
+    }
 }
 
 // Save the loyalty points
@@ -802,12 +1236,116 @@ function get_user_profile_data(WP_REST_Request $request)
     $phone = get_post_meta($profile_id, 'phone', true);
     $loyalty_points = get_post_meta($profile_id, 'loyalty_points', true);
 
+    // =========================
+    // Fetch Rewards
+    // =========================
+    $rewards_query = new WP_Query(array(
+        'post_type'      => 'reward',
+        'posts_per_page' => -1,
+        'post_status'    => 'publish'
+    ));
+
+    $rewards = array();
+
+    if ($rewards_query->have_posts()) {
+        while ($rewards_query->have_posts()) {
+            $rewards_query->the_post();
+
+            $reward_id = get_the_ID();
+
+            $rewards[] = array(
+                'id' => $reward_id,
+                'name' => get_the_title(),
+                'points_cost' => intval(get_post_meta($reward_id, 'points_cost', true)),
+                'current_quantity' => intval(get_post_meta($reward_id, 'current_quantity', true)),
+            );
+        }
+        wp_reset_postdata();
+    }
+
     return array(
         'name' => $user_post->post_title,
         'phone' => $phone,
-        'loyalty_points' => $loyalty_points,
+        'loyalty_points' => intval($loyalty_points),
+        'rewards' => $rewards
     );
 }
+
+add_action('rest_api_init', function () {
+    register_rest_route('custom/v1', '/promotions', array(
+        'methods'  => 'GET',
+        'callback' => 'get_active_promotions',
+        'permission_callback' => '__return_true',
+    ));
+});
+
+function get_active_promotions(WP_REST_Request $request)
+{
+    $today = date('Y-m-d');
+
+    $query = new WP_Query(array(
+        'post_type'      => 'promotion',
+        'posts_per_page' => -1,
+        'post_status'    => 'publish',
+        'meta_query'     => array(
+            'relation' => 'AND',
+
+            array(
+                'key'     => 'is_active',
+                'value'   => '1',
+                'compare' => '='
+            ),
+
+            array(
+                'key'     => 'expiry_date',
+                'value'   => $today,
+                'compare' => '>=',
+                'type'    => 'DATE'
+            ),
+        ),
+        'orderby' => 'date',
+        'order'   => 'DESC'
+    ));
+
+    $promotions = array();
+
+    if ($query->have_posts()) {
+        while ($query->have_posts()) {
+            $query->the_post();
+
+            $post_id = get_the_ID();
+
+            $expiry_date = get_post_meta($post_id, 'expiry_date', true);
+            $promo_link  = get_post_meta($post_id, 'promo_link', true);
+            $media_id    = get_post_meta($post_id, 'promotion_media_id', true);
+
+            $media_url = $media_id ? wp_get_attachment_url($media_id) : '';
+            $mime      = $media_id ? get_post_mime_type($media_id) : '';
+
+            $promotions[] = array(
+                'id'          => $post_id,
+                'title'       => get_the_title(),
+                'content'     => apply_filters('the_content', get_the_content()),
+                'expiry_date' => $expiry_date,
+                'promo_link'  => $promo_link,
+                'media'       => array(
+                    'url'  => $media_url,
+                    'type' => $mime
+                )
+            );
+        }
+
+        wp_reset_postdata();
+    }
+
+    return array(
+        'count' => count($promotions),
+        'promotions' => $promotions
+    );
+}
+
+
+
 
 
 // Register custom REST route for fetching user receipts
@@ -837,7 +1375,9 @@ function custom_get_user_receipts(WP_REST_Request $request)
         'meta_key'    => 'profile_id',
         'meta_value'  => $profile_id,
         'post_status' => 'publish',
-        'posts_per_page' => -1, // Retrieve all receipts
+        'posts_per_page' => 10, // Latest 10 receipts
+        'orderby'        => 'date',
+        'order'          => 'DESC' // Most recent first
     );
 
     $query = new WP_Query($args);
