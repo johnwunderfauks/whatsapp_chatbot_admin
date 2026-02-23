@@ -316,6 +316,41 @@ function custom_update_receipt_details(WP_REST_Request $request)
 
     update_post_meta($receipt_id, 'processed_at', current_time('mysql'));
 
+    // ========================================
+    // SEND ADMIN NOTIFICATION
+    // ========================================
+    
+    // Check if this is a new submission (not already notified)
+    $already_notified = get_post_meta($receipt_id, 'admin_notified_at', true);
+    
+    if (empty($already_notified)) {
+        // Determine if notification should be sent based on settings
+        $send_for_all = get_option('receipt_notification_send_for_all', '1');
+        $min_fraud_score = intval(get_option('receipt_notification_min_fraud_score', 0));
+        $current_fraud_score = floatval($fraud_score);
+        
+        $should_notify = false;
+        
+        if ($send_for_all === '1') {
+            // Send notification for all receipts
+            $should_notify = true;
+        } elseif ($current_fraud_score >= $min_fraud_score) {
+            // Send notification only for high-risk receipts
+            $should_notify = true;
+        }
+        
+        if ($should_notify) {
+            // Send the notification
+            $notification_sent = notify_admins_new_receipt($receipt_id);
+            
+            if ($notification_sent) {
+                error_log("Admin notification sent for receipt #{$receipt_id}");
+            } else {
+                error_log("Failed to send admin notification for receipt #{$receipt_id}");
+            }
+        }
+    }
+
     return [
         'success'    => true,
         'receipt_id' => $receipt_id,
@@ -343,6 +378,8 @@ add_action('rest_api_init', function () {
         }
     ));
 });
+
+
 
 // Store WhatsApp user data
 function custom_store_whatsapp_user_data(WP_REST_Request $request)
@@ -578,13 +615,28 @@ function display_receipt_meta_box($post)
         </div>
     </div>
 
-    <button type="button" id="update-points-btn" class="update-points-btn" 
-                data-receipt-id="<?php echo esc_attr($post->ID); ?>"
-                data-profile-id="<?php echo esc_attr($profile_id); ?>"
-                data-phone="<?php echo esc_attr($phone); ?>"
-                data-username="<?php echo esc_attr($username); ?>">
-            💎 Update & Notify
-        </button>
+    <?php
+    // Check if receipt is already approved and points awarded
+    $current_status = get_post_meta($post->ID, 'receipt_status', true) ?: 'pending';
+    $points_awarded_at = get_post_meta($post->ID, 'loyalty_points_awarded_at', true);
+    $is_already_approved = ($current_status === 'accepted' && !empty($points_awarded_at));
+    ?>
+
+    <button type="button" 
+            id="update-points-btn" 
+            class="update-points-btn" 
+            data-receipt-id="<?php echo esc_attr($post->ID); ?>"
+            data-profile-id="<?php echo esc_attr($profile_id); ?>"
+            data-phone="<?php echo esc_attr($phone); ?>"
+            data-username="<?php echo esc_attr($username); ?>"
+            <?php echo $is_already_approved ? 'disabled' : ''; ?>>
+        <?php echo $is_already_approved ? '✅ Already Approved' : '💎 Update & Notify'; ?>
+    </button>
+    <?php if ($is_already_approved): ?>
+        <span style="color: #22c55e; margin-left: 10px;">
+            ✓ Points awarded on <?php echo date('Y-m-d H:i', strtotime($points_awarded_at)); ?>
+        </span>
+    <?php endif; ?>
         <span id="loyalty-status"></span>
     <div id="receipt-image-modal" style="
         display:none;
@@ -709,6 +761,11 @@ function display_receipt_meta_box($post)
                         
                         // Update the total points display
                         $('p:contains("User\'s Total Points:")').text('User\'s Total Points: ' + response.data.total_points);
+
+                        // Reload page after brief delay
+                        setTimeout(function() {
+                            window.location.reload();
+                        }, 1000);
                     } else {
                         statusDiv.removeClass('success').addClass('error').text('❌ ' + response.data.message).show();
                     }

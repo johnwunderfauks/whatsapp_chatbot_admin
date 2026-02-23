@@ -1984,6 +1984,383 @@ function custom_get_comprehensive_analytics(WP_REST_Request $request)
     );
 }
 
+/**
+ * Send email notification to admins when receipt is submitted
+ */
+function notify_admins_new_receipt($receipt_id) {
+    // Get receipt details
+    $receipt = get_post($receipt_id);
+    if (!$receipt) {
+        return false;
+    }
+    
+    $profile_id = get_post_meta($receipt_id, 'profile_id', true);
+    $store_name = get_post_meta($receipt_id, 'store_name', true);
+    $total_amount = get_post_meta($receipt_id, 'total_amount', true);
+    $currency = get_post_meta($receipt_id, 'currency', true) ?: 'SGD';
+    $purchase_date = get_post_meta($receipt_id, 'purchase_date', true);
+    $fraud_score = get_post_meta($receipt_id, 'fraud_score', true);
+    
+    // Get user details
+    $user_post = get_post($profile_id);
+    $user_name = $user_post ? $user_post->post_title : 'Unknown User';
+    $user_phone = get_post_meta($profile_id, 'phone', true);
+    
+    // Get admin emails
+    $admin_emails = get_admin_notification_emails();
+    
+    if (empty($admin_emails)) {
+        return false;
+    }
+    
+    // Determine priority based on fraud score
+    $priority = 'Normal';
+    $priority_emoji = '📝';
+    if ($fraud_score >= 80) {
+        $priority = 'HIGH RISK';
+        $priority_emoji = '🚨';
+    } elseif ($fraud_score >= 60) {
+        $priority = 'Medium Risk';
+        $priority_emoji = '⚠️';
+    }
+    
+    // Email subject
+    $subject = $priority_emoji . ' New Receipt Submission';
+    if ($fraud_score >= 60) {
+        $subject .= ' - ' . $priority;
+    }
+    
+    // Email body (HTML)
+    $edit_url = admin_url('post.php?post=' . $receipt_id . '&action=edit');
+    $all_receipts_url = admin_url('edit.php?post_type=receipt');
+    
+    ob_start();
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                color: #333;
+            }
+            .container {
+                max-width: 600px;
+                margin: 0 auto;
+                padding: 20px;
+            }
+            .header {
+                background: <?php echo $fraud_score >= 80 ? '#fee' : '#f0f6fc'; ?>;
+                padding: 20px;
+                border-left: 4px solid <?php echo $fraud_score >= 80 ? '#ef4444' : '#2271b1'; ?>;
+                margin-bottom: 20px;
+            }
+            .header h2 {
+                margin: 0 0 10px 0;
+                color: <?php echo $fraud_score >= 80 ? '#ef4444' : '#2271b1'; ?>;
+            }
+            .info-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+            }
+            .info-table td {
+                padding: 10px;
+                border-bottom: 1px solid #eee;
+            }
+            .info-table td:first-child {
+                font-weight: bold;
+                width: 150px;
+                color: #666;
+            }
+            .fraud-score {
+                font-size: 24px;
+                font-weight: bold;
+                padding: 10px 20px;
+                border-radius: 8px;
+                display: inline-block;
+                margin: 10px 0;
+            }
+            .fraud-low {
+                background: #d4edda;
+                color: #155724;
+            }
+            .fraud-medium {
+                background: #fff3cd;
+                color: #856404;
+            }
+            .fraud-high {
+                background: #f8d7da;
+                color: #721c24;
+            }
+            .button {
+                display: inline-block;
+                padding: 12px 24px;
+                background: #2271b1;
+                color: white;
+                text-decoration: none;
+                border-radius: 4px;
+                margin: 10px 10px 10px 0;
+            }
+            .button:hover {
+                background: #135e96;
+            }
+            .footer {
+                margin-top: 30px;
+                padding-top: 20px;
+                border-top: 1px solid #eee;
+                font-size: 12px;
+                color: #999;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h2><?php echo $priority_emoji; ?> New Receipt Submitted</h2>
+                <?php if ($fraud_score >= 60): ?>
+                    <p style="margin: 0; color: #ef4444; font-weight: bold;">⚠️ Requires immediate attention!</p>
+                <?php endif; ?>
+            </div>
+            
+            <p>A new receipt has been submitted and is awaiting review.</p>
+            
+            <table class="info-table">
+                <tr>
+                    <td>Receipt ID:</td>
+                    <td><strong>#<?php echo $receipt_id; ?></strong></td>
+                </tr>
+                <tr>
+                    <td>User:</td>
+                    <td><?php echo esc_html($user_name); ?></td>
+                </tr>
+                <tr>
+                    <td>Phone:</td>
+                    <td><?php echo esc_html($user_phone); ?></td>
+                </tr>
+                <tr>
+                    <td>Store:</td>
+                    <td><?php echo esc_html($store_name); ?></td>
+                </tr>
+                <tr>
+                    <td>Amount:</td>
+                    <td><strong><?php echo $currency . ' ' . $total_amount; ?></strong></td>
+                </tr>
+                <tr>
+                    <td>Purchase Date:</td>
+                    <td><?php echo esc_html($purchase_date); ?></td>
+                </tr>
+                <tr>
+                    <td>Submitted:</td>
+                    <td><?php echo get_the_date('Y-m-d H:i', $receipt_id); ?></td>
+                </tr>
+            </table>
+            
+            <?php if (!empty($fraud_score)): ?>
+                <div>
+                    <strong>Fraud Score:</strong><br>
+                    <span class="fraud-score <?php 
+                        if ($fraud_score >= 80) echo 'fraud-high';
+                        elseif ($fraud_score >= 40) echo 'fraud-medium';
+                        else echo 'fraud-low';
+                    ?>">
+                        <?php echo number_format($fraud_score, 1); ?>/100
+                    </span>
+                </div>
+            <?php endif; ?>
+            
+            <?php
+            // Show fraud reasons if any
+            $fraud_reasons = get_post_meta($receipt_id, 'fraud_reasons', true);
+            if (is_array($fraud_reasons) && !empty($fraud_reasons)):
+            ?>
+                <div style="background: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; margin: 20px 0;">
+                    <strong>⚠️ Fraud Flags:</strong>
+                    <ul style="margin: 10px 0;">
+                        <?php foreach ($fraud_reasons as $reason): ?>
+                            <li><?php echo esc_html($reason); ?></li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+            <?php endif; ?>
+            
+            <div style="margin: 30px 0;">
+                <a href="<?php echo $edit_url; ?>" class="button">📝 Review Receipt</a>
+                <a href="<?php echo $all_receipts_url; ?>" class="button" style="background: #6b7280;">📋 View All Receipts</a>
+            </div>
+            
+            <div class="footer">
+                <p>This is an automated notification from your Receipt Management System.</p>
+                <p>To manage notification settings, go to WordPress Admin → Settings → Receipt Notifications</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    <?php
+    $message = ob_get_clean();
+    
+    // Email headers
+    $headers = array(
+        'Content-Type: text/html; charset=UTF-8',
+        'From: Receipt System <noreply@' . parse_url(get_site_url(), PHP_URL_HOST) . '>'
+    );
+    
+    // Send email
+    $sent = wp_mail($admin_emails, $subject, $message, $headers);
+    
+    // Log the notification
+    if ($sent) {
+        update_post_meta($receipt_id, 'admin_notified_at', current_time('mysql'));
+        error_log("Receipt notification sent to admins for receipt #{$receipt_id}");
+    } else {
+        error_log("Failed to send receipt notification for receipt #{$receipt_id}");
+    }
+    
+    return $sent;
+}
+
+/**
+ * Get admin email addresses for notifications
+ */
+function get_admin_notification_emails() {
+    // Option 1: Use custom option (recommended)
+    $custom_emails = get_option('receipt_notification_emails', '');
+    
+    if (!empty($custom_emails)) {
+        // Split by comma or newline
+        $emails = preg_split('/[\r\n,]+/', $custom_emails);
+        $emails = array_map('trim', $emails);
+        $emails = array_filter($emails, 'is_email');
+        
+        if (!empty($emails)) {
+            return $emails;
+        }
+    }
+    
+    // Option 2: Fallback to all admin users
+    $admins = get_users(array('role' => 'administrator'));
+    $emails = array();
+    
+    foreach ($admins as $admin) {
+        if (!empty($admin->user_email)) {
+            $emails[] = $admin->user_email;
+        }
+    }
+    
+    return $emails;
+}
+
+/**
+ * Add settings page for receipt notifications
+ */
+add_action('admin_menu', 'add_receipt_notification_settings');
+function add_receipt_notification_settings() {
+    add_options_page(
+        'Receipt Notifications',
+        'Receipt Notifications',
+        'manage_options',
+        'receipt-notifications',
+        'render_receipt_notification_settings'
+    );
+}
+
+function render_receipt_notification_settings() {
+    // Save settings
+    if (isset($_POST['save_notification_settings']) && check_admin_referer('receipt_notification_settings')) {
+        $emails = sanitize_textarea_field($_POST['notification_emails']);
+        $min_fraud_score = intval($_POST['min_fraud_score']);
+        $send_for_all = isset($_POST['send_for_all']) ? '1' : '0';
+        
+        update_option('receipt_notification_emails', $emails);
+        update_option('receipt_notification_min_fraud_score', $min_fraud_score);
+        update_option('receipt_notification_send_for_all', $send_for_all);
+        
+        echo '<div class="notice notice-success"><p>✅ Settings saved successfully!</p></div>';
+    }
+    
+    $emails = get_option('receipt_notification_emails', '');
+    $min_fraud_score = get_option('receipt_notification_min_fraud_score', 0);
+    $send_for_all = get_option('receipt_notification_send_for_all', '1');
+    
+    ?>
+    <div class="wrap">
+        <h1>📧 Receipt Notification Settings</h1>
+        
+        <form method="POST">
+            <?php wp_nonce_field('receipt_notification_settings'); ?>
+            
+            <table class="form-table">
+                <tr>
+                    <th scope="row">
+                        <label for="notification_emails">Notification Email Addresses</label>
+                    </th>
+                    <td>
+                        <textarea name="notification_emails" id="notification_emails" rows="5" class="large-text"><?php echo esc_textarea($emails); ?></textarea>
+                        <p class="description">Enter email addresses to receive receipt notifications (one per line or comma-separated). Leave empty to send to all administrators.</p>
+                    </td>
+                </tr>
+                
+                <tr>
+                    <th scope="row">
+                        <label for="send_for_all">Send Notifications</label>
+                    </th>
+                    <td>
+                        <label>
+                            <input type="checkbox" name="send_for_all" id="send_for_all" value="1" <?php checked($send_for_all, '1'); ?>>
+                            Send notification for every receipt submission
+                        </label>
+                        <p class="description">If unchecked, only receipts meeting the fraud score threshold below will trigger notifications.</p>
+                    </td>
+                </tr>
+                
+                <tr>
+                    <th scope="row">
+                        <label for="min_fraud_score">Minimum Fraud Score for Alerts</label>
+                    </th>
+                    <td>
+                        <input type="number" name="min_fraud_score" id="min_fraud_score" value="<?php echo esc_attr($min_fraud_score); ?>" min="0" max="100" class="small-text">
+                        <p class="description">Only send notifications for receipts with fraud score at or above this threshold (0 = all receipts). Recommended: 60 for high-risk only.</p>
+                    </td>
+                </tr>
+            </table>
+            
+            <p class="submit">
+                <button type="submit" name="save_notification_settings" class="button button-primary">💾 Save Settings</button>
+            </p>
+        </form>
+        
+        <hr>
+        
+        <h2>📨 Test Email Notification</h2>
+        <p>Send a test email to verify your settings are working correctly.</p>
+        <form method="POST">
+            <?php wp_nonce_field('test_receipt_notification'); ?>
+            <button type="submit" name="send_test_email" class="button">📧 Send Test Email</button>
+        </form>
+        
+        <?php
+        if (isset($_POST['send_test_email']) && check_admin_referer('test_receipt_notification')) {
+            $test_emails = get_admin_notification_emails();
+            
+            $subject = '✅ Test: Receipt Notification System';
+            $message = '<h2>Test Email</h2><p>This is a test email from your Receipt Notification System. If you received this, your notification settings are working correctly!</p>';
+            $headers = array('Content-Type: text/html; charset=UTF-8');
+            
+            $sent = wp_mail($test_emails, $subject, $message, $headers);
+            
+            if ($sent) {
+                echo '<div class="notice notice-success"><p>✅ Test email sent successfully to: ' . implode(', ', $test_emails) . '</p></div>';
+            } else {
+                echo '<div class="notice notice-error"><p>❌ Failed to send test email. Please check your WordPress email configuration.</p></div>';
+            }
+        }
+        ?>
+    </div>
+    <?php
+}
+
 
 /**
  * Disable SiteGround Security for custom API endpoints

@@ -577,6 +577,90 @@ function add_receipt_filters($post_type) {
         <option value="not_scored" <?php selected($current_fraud, 'not_scored'); ?>>Not Scored</option>
     </select>
     <?php
+    
+    // Store/Merchant input field
+    $merchant_search = isset($_GET['merchant_search']) ? $_GET['merchant_search'] : '';
+    ?>
+    <input type="text" 
+           name="merchant_search" 
+           placeholder="🏪 Search merchant..." 
+           value="<?php echo esc_attr($merchant_search); ?>" 
+           style="width: 180px;">
+    <?php
+    
+    // Item name search
+    $item_search = isset($_GET['item_name_search']) ? $_GET['item_name_search'] : '';
+    ?>
+    <input type="text" 
+           name="item_name_search" 
+           placeholder="📦 Search item name..." 
+           value="<?php echo esc_attr($item_search); ?>" 
+           style="width: 180px;">
+    <?php
+    
+    // Brand search input
+    $brand_search = isset($_GET['brand_search']) ? $_GET['brand_search'] : '';
+    ?>
+    <input type="text" 
+           name="brand_search" 
+           placeholder="🏷️ Search brand..." 
+           value="<?php echo esc_attr($brand_search); ?>" 
+           style="width: 180px;">
+    <?php
+    
+    // User/Phone search
+    $user_search = isset($_GET['user_search']) ? $_GET['user_search'] : '';
+    ?>
+    <input type="text" 
+           name="user_search" 
+           placeholder="👤 Search user/phone..." 
+           value="<?php echo esc_attr($user_search); ?>" 
+           style="width: 180px;">
+    <?php
+    
+    // Receipt ID search
+    $receipt_id_search = isset($_GET['receipt_id_search']) ? $_GET['receipt_id_search'] : '';
+    ?>
+    <input type="text" 
+           name="receipt_id_search" 
+           placeholder="🧾 Receipt ID..." 
+           value="<?php echo esc_attr($receipt_id_search); ?>" 
+           style="width: 150px;">
+    <?php
+    
+    // Date range filters
+    $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
+    $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
+    ?>
+    <input type="date" 
+           name="date_from" 
+           value="<?php echo esc_attr($date_from); ?>" 
+           style="width: 150px;"
+           placeholder="From date">
+    <input type="date" 
+           name="date_to" 
+           value="<?php echo esc_attr($date_to); ?>" 
+           style="width: 150px;"
+           placeholder="To date">
+    <?php
+    
+    // Add a clear filters button
+    if ($current_status || $current_fraud || $merchant_search || $item_search || $brand_search || $user_search || $receipt_id_search || $date_from || $date_to) {
+        ?>
+        <a href="<?php echo admin_url('edit.php?post_type=receipt'); ?>" 
+           class="button" 
+           style="margin-left: 5px;">
+            🔄 Clear Filters
+        </a>
+        <?php
+    }
+    
+    // Add a search button (optional, filters apply on enter too)
+    ?>
+    <button type="submit" class="button" style="margin-left: 5px;">
+        🔍 Search
+    </button>
+    <?php
 }
 
 /**
@@ -584,7 +668,7 @@ function add_receipt_filters($post_type) {
  */
 add_filter('parse_query', 'filter_receipts_by_custom_fields');
 function filter_receipts_by_custom_fields($query) {
-    global $pagenow, $typenow;
+    global $pagenow, $typenow, $wpdb;
     
     if (!is_admin() || $pagenow !== 'edit.php' || $typenow !== 'receipt') {
         return;
@@ -606,7 +690,6 @@ function filter_receipts_by_custom_fields($query) {
         $fraud_filter = sanitize_text_field($_GET['fraud_score_filter']);
         
         if ($fraud_filter === 'not_scored') {
-            // Show receipts with no fraud score or score = 0
             $meta_query[] = array(
                 'relation' => 'OR',
                 array(
@@ -621,7 +704,6 @@ function filter_receipts_by_custom_fields($query) {
                 )
             );
         } else {
-            // Parse range (e.g., "0-20", "81-100")
             $range = explode('-', $fraud_filter);
             if (count($range) === 2) {
                 $min = intval($range[0]);
@@ -637,6 +719,85 @@ function filter_receipts_by_custom_fields($query) {
         }
     }
     
+    // Filter by merchant (partial match)
+    if (isset($_GET['merchant_search']) && !empty($_GET['merchant_search'])) {
+        $meta_query[] = array(
+            'key' => 'store_name',
+            'value' => sanitize_text_field($_GET['merchant_search']),
+            'compare' => 'LIKE'
+        );
+    }
+    
+    // Filter by receipt ID on receipt
+    if (isset($_GET['receipt_id_search']) && !empty($_GET['receipt_id_search'])) {
+        $meta_query[] = array(
+            'key' => 'receipt_id_on_receipt',
+            'value' => sanitize_text_field($_GET['receipt_id_search']),
+            'compare' => 'LIKE'
+        );
+    }
+    
+    // Filter by user/phone
+    if (isset($_GET['user_search']) && !empty($_GET['user_search'])) {
+        $user_search = sanitize_text_field($_GET['user_search']);
+        
+        // Search for users matching name or phone
+        $matching_user_ids = get_users_by_name_or_phone($user_search);
+        
+        if (!empty($matching_user_ids)) {
+            $meta_query[] = array(
+                'key' => 'profile_id',
+                'value' => $matching_user_ids,
+                'compare' => 'IN'
+            );
+        } else {
+            // No users found - show nothing
+            $query->set('post__in', array(0));
+            return;
+        }
+    }
+    
+    // Filter by date range
+    $date_query = array();
+    if (isset($_GET['date_from']) && !empty($_GET['date_from'])) {
+        $date_query['after'] = sanitize_text_field($_GET['date_from']);
+    }
+    if (isset($_GET['date_to']) && !empty($_GET['date_to'])) {
+        $date_query['before'] = sanitize_text_field($_GET['date_to']);
+    }
+    if (!empty($date_query)) {
+        $date_query['inclusive'] = true;
+        $query->set('date_query', array($date_query));
+    }
+    
+    // Filter by item name or brand (complex - need custom SQL)
+    if ((isset($_GET['item_name_search']) && !empty($_GET['item_name_search'])) || 
+        (isset($_GET['brand_search']) && !empty($_GET['brand_search']))) {
+        
+        $item_search = isset($_GET['item_name_search']) ? sanitize_text_field($_GET['item_name_search']) : '';
+        $brand_search = isset($_GET['brand_search']) ? sanitize_text_field($_GET['brand_search']) : '';
+        
+        // Get receipt IDs that match item/brand criteria
+        $matching_receipt_ids = get_receipts_by_items($item_search, $brand_search);
+        
+        if (!empty($matching_receipt_ids)) {
+            // Combine with existing post__in if set by user search
+            $existing_post_in = $query->get('post__in');
+            if (!empty($existing_post_in) && $existing_post_in !== array(0)) {
+                $matching_receipt_ids = array_intersect($matching_receipt_ids, $existing_post_in);
+            }
+            
+            if (empty($matching_receipt_ids)) {
+                $query->set('post__in', array(0));
+            } else {
+                $query->set('post__in', $matching_receipt_ids);
+            }
+        } else {
+            // No matches found - show nothing
+            $query->set('post__in', array(0));
+        }
+    }
+    
     // Apply meta query if filters are set
     if (!empty($meta_query)) {
         if (count($meta_query) > 1) {
@@ -644,6 +805,158 @@ function filter_receipts_by_custom_fields($query) {
         }
         $query->set('meta_query', $meta_query);
     }
+}
+
+/**
+ * Get user IDs matching name or phone search
+ */
+function get_users_by_name_or_phone($search_term) {
+    global $wpdb;
+    
+    $search_term = sanitize_text_field($search_term);
+    
+    // Search by user title (name)
+    $users_by_name = $wpdb->get_col($wpdb->prepare("
+        SELECT ID FROM {$wpdb->posts} 
+        WHERE post_type = 'whatsapp_user' 
+        AND post_title LIKE %s
+    ", '%' . $wpdb->esc_like($search_term) . '%'));
+    
+    // Search by phone
+    $users_by_phone = $wpdb->get_col($wpdb->prepare("
+        SELECT post_id FROM {$wpdb->postmeta} 
+        WHERE meta_key = 'phone' 
+        AND meta_value LIKE %s
+    ", '%' . $wpdb->esc_like($search_term) . '%'));
+    
+    // Merge and deduplicate
+    $matching_ids = array_unique(array_merge($users_by_name, $users_by_phone));
+    
+    return $matching_ids;
+}
+
+/**
+ * Show active filters above the receipts list
+ */
+add_action('manage_posts_extra_tablenav', 'show_active_receipt_filters');
+function show_active_receipt_filters($which) {
+    if ($which !== 'top' || get_current_screen()->post_type !== 'receipt') {
+        return;
+    }
+    
+    $active_filters = array();
+    
+    if (isset($_GET['receipt_status_filter']) && !empty($_GET['receipt_status_filter'])) {
+        $active_filters[] = '<strong>Status:</strong> ' . ucfirst($_GET['receipt_status_filter']);
+    }
+    
+    if (isset($_GET['fraud_score_filter']) && !empty($_GET['fraud_score_filter'])) {
+        $active_filters[] = '<strong>Fraud Score:</strong> ' . $_GET['fraud_score_filter'];
+    }
+    
+    if (isset($_GET['merchant_search']) && !empty($_GET['merchant_search'])) {
+        $active_filters[] = '<strong>Merchant:</strong> "' . esc_html($_GET['merchant_search']) . '"';
+    }
+    
+    if (isset($_GET['item_name_search']) && !empty($_GET['item_name_search'])) {
+        $active_filters[] = '<strong>Item Name:</strong> "' . esc_html($_GET['item_name_search']) . '"';
+    }
+    
+    if (isset($_GET['brand_search']) && !empty($_GET['brand_search'])) {
+        $active_filters[] = '<strong>Brand:</strong> "' . esc_html($_GET['brand_search']) . '"';
+    }
+    
+    if (isset($_GET['user_search']) && !empty($_GET['user_search'])) {
+        $active_filters[] = '<strong>User:</strong> "' . esc_html($_GET['user_search']) . '"';
+    }
+    
+    if (isset($_GET['receipt_id_search']) && !empty($_GET['receipt_id_search'])) {
+        $active_filters[] = '<strong>Receipt ID:</strong> "' . esc_html($_GET['receipt_id_search']) . '"';
+    }
+    
+    if (isset($_GET['date_from']) && !empty($_GET['date_from'])) {
+        $active_filters[] = '<strong>From:</strong> ' . esc_html($_GET['date_from']);
+    }
+    
+    if (isset($_GET['date_to']) && !empty($_GET['date_to'])) {
+        $active_filters[] = '<strong>To:</strong> ' . esc_html($_GET['date_to']);
+    }
+    
+    if (!empty($active_filters)) {
+        echo '<div class="alignleft actions" style="padding: 10px; background: #f0f6fc; border-left: 4px solid #2271b1; margin: 10px 0; border-radius: 4px;">';
+        echo '<strong>🔍 Active Filters:</strong> ' . implode(' • ', $active_filters);
+        echo '</div>';
+    }
+}
+
+/**
+ * Get receipt IDs that contain specific items or brands
+ */
+function get_receipts_by_items($item_name = '', $brand_name = '') {
+    global $wpdb;
+    
+    if (empty($item_name) && empty($brand_name)) {
+        return array();
+    }
+    
+    // Get all receipts with items
+    $results = $wpdb->get_results("
+        SELECT post_id, meta_value 
+        FROM {$wpdb->postmeta} 
+        WHERE meta_key = 'receipt_items' 
+        AND meta_value != ''
+    ", ARRAY_A);
+    
+    $matching_receipt_ids = array();
+    
+    foreach ($results as $row) {
+        $receipt_id = $row['post_id'];
+        $items_data = $row['meta_value'];
+        
+        if (empty($items_data)) {
+            continue;
+        }
+        
+        // Unserialize the array (WordPress stores arrays as serialized data)
+        $items = maybe_unserialize($items_data);
+        
+        // If it's not an array, skip
+        if (!is_array($items)) {
+            continue;
+        }
+        
+        // Check each item
+        foreach ($items as $item) {
+            if (!is_array($item) || !isset($item['name'])) {
+                continue;
+            }
+            
+            $matches = true;
+            
+            // Check item name (partial match, case-insensitive)
+            if (!empty($item_name)) {
+                if (stripos($item['name'], $item_name) === false) {
+                    $matches = false;
+                }
+            }
+            
+            // Check brand name (partial match, case-insensitive)
+            if (!empty($brand_name) && $matches) {
+                $item_brand = extract_brand_from_item($item['name']);
+                if (stripos($item_brand, $brand_name) === false) {
+                    $matches = false;
+                }
+            }
+            
+            // If this item matches, add receipt ID and move to next receipt
+            if ($matches) {
+                $matching_receipt_ids[] = $receipt_id;
+                break; // Found a match in this receipt, move to next receipt
+            }
+        }
+    }
+    
+    return array_unique($matching_receipt_ids);
 }
 
 /**
@@ -2253,8 +2566,109 @@ function adjust_audit_points($audit_id, $new_points, $adjustment_reason) {
         ),
         array('%d', '%d', '%d', '%d', '%d', '%s', '%s', '%d', '%s')
     );
+
+    if ($inserted) {
+        // ========================================
+        // SEND WHATSAPP NOTIFICATION TO USER
+        // ========================================
+        send_points_adjustment_notification(
+            $user_id, 
+            $audit->receipt_id, 
+            $old_points, 
+            $new_points, 
+            $points_difference, 
+            $new_total,
+            $adjustment_reason
+        );
+    }
     
     return $inserted !== false;
+}
+
+/**
+ * Send WhatsApp notification when points are adjusted
+ */
+function send_points_adjustment_notification($user_id, $receipt_id, $old_points, $new_points, $points_difference, $new_total, $reason) {
+    // Get user details
+    $user_post = get_post($user_id);
+    if (!$user_post) {
+        return false;
+    }
+    
+    $phone = get_post_meta($user_id, 'phone', true);
+    if (empty($phone)) {
+        return false;
+    }
+    
+    // Get webhook URL
+    $webhook_url = get_option('whatsapp_webhook_url', '');
+    if (empty($webhook_url)) {
+        return false;
+    }
+    
+    // Get receipt details if available
+    $receipt_info = 'your recent receipt';
+    if ($receipt_id) {
+        $receipt = get_post($receipt_id);
+        if ($receipt) {
+            $store_name = get_post_meta($receipt_id, 'store_name', true);
+            $receipt_id_on_receipt = get_post_meta($receipt_id, 'receipt_id_on_receipt', true);
+            
+            if ($store_name && $receipt_id_on_receipt) {
+                $receipt_info = "receipt #{$receipt_id_on_receipt} from {$store_name}";
+            } elseif ($store_name) {
+                $receipt_info = "receipt from {$store_name}";
+            } elseif ($receipt_id_on_receipt) {
+                $receipt_info = "receipt #{$receipt_id_on_receipt}";
+            }
+        }
+    }
+    
+    // Determine if points increased or decreased
+    $is_increase = $points_difference > 0;
+    $change_text = $is_increase ? 'increased' : 'decreased';
+    $change_amount = abs($points_difference);
+    
+    // Choose appropriate template based on change type
+    if ($is_increase) {
+        $template_name = 'points_adjusted_increase';
+    } else {
+        $template_name = 'points_adjusted_decrease';
+    }
+    
+    // Send WhatsApp notification using template
+    $response = wp_remote_post($webhook_url, array(
+        'headers' => array('Content-Type' => 'application/json'),
+        'body' => wp_json_encode(array(
+            'phone' => $phone,
+            'use_template' => true,
+            'template_name' => $template_name,
+            'template_params' => array(
+                $old_points,           // {{1}} - Original points
+                $new_points,           // {{2}} - New points
+                $change_amount,        // {{3}} - Change amount
+                $new_total,            // {{4}} - New total
+                $receipt_info          // {{5}} - Receipt info
+            ),
+            // Fallback message if template fails
+            'message' => "💎 Points Adjustment\n\n" .
+                        "Your loyalty points for {$receipt_info} have been {$change_text}.\n\n" .
+                        "Previous Points: {$old_points} 💎\n" .
+                        "New Points: {$new_points} 💎\n" .
+                        "Change: " . ($is_increase ? '+' : '-') . "{$change_amount} 💎\n\n" .
+                        "Your Total Points: {$new_total} 💎\n\n" .
+                        "Reason: {$reason}"
+        )),
+        'timeout' => 30
+    ));
+    
+    if (is_wp_error($response)) {
+        error_log("Failed to send points adjustment notification to {$phone}: " . $response->get_error_message());
+        return false;
+    }
+    
+    error_log("Points adjustment notification sent to {$phone} (Receipt #{$receipt_id})");
+    return true;
 }
 
 
