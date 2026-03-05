@@ -359,15 +359,6 @@ function custom_update_receipt_details(WP_REST_Request $request)
 }
 
 
-add_action('rest_api_init', function () {
-    register_rest_route('custom/v1', '/upload/', array(
-        'methods' => 'POST',
-        'callback' => 'custom_handle_upload',
-        'permission_callback' => function () {
-            return current_user_can('edit_posts');
-        },
-    ));
-});
 // Register custom REST route for storing WhatsApp user data
 add_action('rest_api_init', function () {
     register_rest_route('custom/v1', '/store-whatsapp-user', array(
